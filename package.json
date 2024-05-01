@@ -1,5 +1,6 @@
 {
   "dependencies": {
+    "adm-zip": "^0.5.12",
     "aws-sdk": "^2.1610.0",
     "contentful-export": "^7.19.144"
   }

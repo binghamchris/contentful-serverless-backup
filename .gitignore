@@ -131,3 +131,5 @@ dist
 
 # Test Builds
 *.zip
+
+.DS_Store
