@@ -1,8 +1,11 @@
-const AWS = require('aws-sdk');
-const s3 = new AWS.S3();
 const fs = require('fs');
 const contentfulExport = require('contentful-export');
-const AdmZip = require("adm-zip");
+const AdmZip = require('adm-zip');
+const {
+  S3Client,
+  PutObjectCommand,
+} = require('@aws-sdk/client-s3');
+const s3Client = new S3Client();
 
 exports.handler = async (event) => {
   // Create file names and paths
@@ -68,13 +71,14 @@ const sendResponse = (status, body) => {
 
 // Function to upload a file to S3
 const uploadFile = async (buffer, key) => {
-  let params = {
-    Bucket: process.env.S3_BUCKET_NAME,
-    StorageClass: process.env.S3_STORAGE_CLASS,
-    Key: key,
-    Body: buffer,
-  };
-  return await s3.putObject(params).promise();
+  return await s3Client.send(
+    new PutObjectCommand({
+      Bucket: process.env.S3_BUCKET_NAME,
+      StorageClass: process.env.S3_STORAGE_CLASS,
+      Key: key,
+      Body: buffer,
+    })
+  );
 };
 
 // Function to compress a single file into a zip archive
