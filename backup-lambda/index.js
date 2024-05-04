@@ -13,12 +13,41 @@ exports.handler = async (event) => {
   const zipFilename = `${filenameBase}.zip`;
   const zipFilePath = `${localBackupPath}/${zipFilename}`;
 
+  const {
+    SSMClient,
+    GetParametersCommand,
+  } = require('@aws-sdk/client-ssm');
+  const ssmClient = new SSMClient();
+  // Get the SecureString parameters containing the Contentful API tokens from SSM Parameter Store
+  const ssmParameters = await ssmClient.send(
+    new GetParametersCommand({
+      Names: [
+        process.env.MANAGEMENT_TOKEN_ARN,
+        process.env.DELIVERY_TOKEN_ARN,
+      ],
+      WithDecryption: true,
+    }),
+  );
+
+  // Parse the SSM response to extract the parameter values
+  let contentfulManagementToken,
+      contentfulDeliveryToken;
+  
+  for(param in ssmParameters['Parameters']) {
+    switch(ssmParameters['Parameters'][param]['ARN']){
+      case process.env.MANAGEMENT_TOKEN_ARN:
+        contentfulManagementToken = ssmParameters['Parameters'][param]['Value'];
+      case process.env.DELIVERY_TOKEN_ARN:
+        contentfulDeliveryToken = ssmParameters['Parameters'][param]['Value'];
+    }
+  }
+
   // Set options for the Contentful export
   const contentfulExportOptions = {
     spaceId: process.env.SPACE_ID,
     environmentId: process.env.SPACE_ENV,
-    managementToken: process.env.MANAGEMENT_TOKEN,
-    deliveryToken: process.env.DELIVERY_TOKEN,
+    managementToken: contentfulManagementToken,
+    deliveryToken: contentfulDeliveryToken,
     contentFile: contentfulExportFilename,
     exportDir: localBackupPath,
     useVerboseRenderer: false,
