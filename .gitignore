@@ -133,3 +133,4 @@ dist
 *.zip
 
 .DS_Store
+/test

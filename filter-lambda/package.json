@@ -1,0 +1,5 @@
+{
+  "dependencies": {
+    "sync-fetch": "^0.5.2"
+  }
+}

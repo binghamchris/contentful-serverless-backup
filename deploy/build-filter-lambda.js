@@ -8,10 +8,10 @@ const {
 } = require('@aws-sdk/client-lambda');
 
 // Create file names and paths
-const lambdaFuncName = process.env.BACKUP_LAMBDA_FUNC_NAME;
+const lambdaFuncName = process.env.FILTER_LAMBDA_FUNC_NAME;
 const awsProfileName = process.env.AWS_PROFILE_NAME;
-const backupLambdaPath = '../backup-lambda/';
-const zipFileName = 'backup-lambda.zip';
+const backupLambdaPath = '../filter-lambda/';
+const zipFileName = 'filter-lambda.zip';
 const zipFilePath = `../${zipFileName}`;
 
 try {
@@ -48,7 +48,7 @@ async function updateLambda(buffer, lambdaFunc){
   const response = await lambdaClient.send(command);
 
   // Report outcome of the deployment
-  if (response['$metadata']['httpStatusCode']) {
+  if (response['$metadata']['httpStatusCode'] == 200) {
     console.log('Deployment Successful');
   } else {
     console.log('ERROR: Deployment failed');

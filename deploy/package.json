@@ -1,7 +1,7 @@
 {
   "dependencies": {
     "@aws-sdk/client-lambda": "^3.567.0",
-    "@aws-sdk/credential-providers": "^3.567.0",
+    "@aws-sdk/credential-providers": "^3.568.0",
     "adm-zip": "^0.5.12",
     "dotenv": "^16.4.5"
   }
