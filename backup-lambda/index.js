@@ -7,63 +7,68 @@ exports.handler = async (event) => {
   const isodate = datetime.toISOString().replaceAll('-', '/').replaceAll(':', '-').replace('T', '/');
   const s3Path = isodate.slice(0, 10);
   const filenameBase = isodate.slice(11);
-  const localBackupPath = '/tmp';
+  const localBackupPath = '/tmp/backup';
   const contentfulExportFilename = `${filenameBase}.json`;
   const contentfulExportFilePath = `${localBackupPath}/${contentfulExportFilename}`;
   const zipFilename = `${filenameBase}.zip`;
   const zipFilePath = `${localBackupPath}/${zipFilename}`;
 
-  const {
-    SSMClient,
-    GetParametersCommand,
-  } = require('@aws-sdk/client-ssm');
-  const ssmClient = new SSMClient();
-  // Get the SecureString parameters containing the Contentful API tokens from SSM Parameter Store
-  const ssmParameters = await ssmClient.send(
-    new GetParametersCommand({
-      Names: [
-        process.env.MANAGEMENT_TOKEN_ARN,
-        process.env.DELIVERY_TOKEN_ARN,
-      ],
-      WithDecryption: true,
-    }),
-  );
-
-  // Parse the SSM response to extract the parameter values
-  let contentfulManagementToken,
-      contentfulDeliveryToken;
-  
-  for(param in ssmParameters['Parameters']) {
-    switch(ssmParameters['Parameters'][param]['ARN']){
-      case process.env.MANAGEMENT_TOKEN_ARN:
-        contentfulManagementToken = ssmParameters['Parameters'][param]['Value'];
-      case process.env.DELIVERY_TOKEN_ARN:
-        contentfulDeliveryToken = ssmParameters['Parameters'][param]['Value'];
-    }
-  }
-
-  // Set options for the Contentful export
-  const contentfulExportOptions = {
-    spaceId: process.env.SPACE_ID,
-    environmentId: process.env.SPACE_ENV,
-    managementToken: contentfulManagementToken,
-    deliveryToken: contentfulDeliveryToken,
-    contentFile: contentfulExportFilename,
-    exportDir: localBackupPath,
-    useVerboseRenderer: false,
-    saveFile: true,
-    includeDrafts: true,
-    maxAllowedLimit: 200,
-  };
-
   try {
+    if (!fs.existsSync(localBackupPath)){
+      fs.mkdirSync(localBackupPath, { recursive: true });
+    }
+  
+    const {
+      SSMClient,
+      GetParametersCommand,
+    } = require('@aws-sdk/client-ssm');
+    const ssmClient = new SSMClient();
+    // Get the SecureString parameters containing the Contentful API tokens from SSM Parameter Store
+    const ssmParameters = await ssmClient.send(
+      new GetParametersCommand({
+        Names: [
+          process.env.MANAGEMENT_TOKEN_ARN,
+          process.env.DELIVERY_TOKEN_ARN,
+        ],
+        WithDecryption: true,
+      }),
+    );
+  
+    // Parse the SSM response to extract the parameter values
+    let contentfulManagementToken,
+        contentfulDeliveryToken;
+    
+    for(param in ssmParameters['Parameters']) {
+      switch(ssmParameters['Parameters'][param]['ARN']){
+        case process.env.MANAGEMENT_TOKEN_ARN:
+          contentfulManagementToken = ssmParameters['Parameters'][param]['Value'];
+        case process.env.DELIVERY_TOKEN_ARN:
+          contentfulDeliveryToken = ssmParameters['Parameters'][param]['Value'];
+      }
+    }
+
+    // Set options for the Contentful export
+    const contentfulExportOptions = {
+      spaceId: process.env.SPACE_ID,
+      environmentId: process.env.SPACE_ENV,
+      managementToken: contentfulManagementToken,
+      deliveryToken: contentfulDeliveryToken,
+      contentFile: contentfulExportFilename,
+      exportDir: localBackupPath,
+      useVerboseRenderer: false,
+      saveFile: true,
+      includeDrafts: true,
+      downloadAssets: true,
+      maxAllowedLimit: 200,
+    };
+
     // Run Contentful export
     const result = await contentfulExport(contentfulExportOptions);
     console.log(`Data downloaded successfully from Contentful for Space ID: ${process.env.SPACE_ID} and Environment: ${process.env.SPACE_ENV}`);
 
     // Compress the JSON file from the Contentful export
     console.log('Compressing backup');
-    await createZipArchive(contentfulExportFilePath, zipFilePath)
+    await createZipArchive(localBackupPath, zipFilePath)
 
     // Prepare the zip archive for upload
     console.log('Preparing file for AWS S3');
@@ -129,11 +134,11 @@ const uploadFile = async (buffer, key) => {
 };
 
 // Function to compress a single file into a zip archive
-const createZipArchive = (inputFile, outputFile) => {
+const createZipArchive = (inputFolder, outputFile) => {
   const AdmZip = require('adm-zip');
-  console.log(`Compressing: ${inputFile}`);
+  console.log(`Compressing: ${inputFolder}`);
   const zip = new AdmZip();
-  zip.addLocalFile(inputFile);
+  zip.addLocalFolder(inputFolder);
   console.log(`Output: ${outputFile}`);
   zip.writeZip(outputFile);
   console.log(`Created ${outputFile} successfully`);
