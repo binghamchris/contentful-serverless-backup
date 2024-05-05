@@ -226,7 +226,7 @@ Resources:
         RestrictPublicBuckets: true
       LifecycleConfiguration:
         Rules:
-          - Id: RawLogsExpiration
+          - Id: BackupsExpiration
             Status: Enabled
             ExpirationInDays: 1095
             Transitions:
