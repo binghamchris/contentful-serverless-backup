@@ -1,0 +1,6 @@
+{
+  "dependencies": {
+    "adm-zip": "^0.5.12",
+    "contentful-export": "^7.19.144"
+  }
+}

@@ -1,0 +1,239 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Event-driven Contentful backup system deployment
+Parameters:
+  SnsTopicArn:
+    Type: String
+    Description: The ARN for the SNS queue created by the Amplify app
+  ContentfulSpaceId:
+    Type: String
+    Description: The Space ID for the Contentful space to use for content
+  ContentfulDeliveryTokenArn:
+    Type: String
+    Description: The ARN of the SSM parameter containing the delivery token for the
+      Contentful space
+  ContentfulManagementTokenArn:
+    Type: String
+    Description: The ARN of the SSM parameter containing the management token for
+      the Contentful space
+  ContentfulSpaceEnvironment:
+    Type: String
+    Description: The environment name in Contentful space to be used
+  S3BackupBucketName:
+    Type: String
+    Description: The name to use for the backups bucket
+  InitialStorageClass:
+    Type: String
+    Description: The S3 storage class to use when backups are first put in the backup bucket
+    AllowedValues:
+      - STANDARD
+      - REDUCED_REDUNDANCY
+      - STANDARD_IA
+      - ONEZONE_IA
+      - INTELLIGENT_TIERING
+      - GLACIER
+      - DEEP_ARCHIVE
+      - GLACIER_IR
+      - EXPRESS_ONEZONE
+  LongTermStorageClass:
+    Type: String
+    Description: The S3 storage class to use for long term storage of backups
+    AllowedValues:
+      - DEEP_ARCHIVE
+      - GLACIER
+      - GLACIER_IR
+      - INTELLIGENT_TIERING
+      - ONEZONE_IA
+      - STANDARD_IA
+  LastUpdateUrl:
+    Type: String
+    Description: The URL of the last update index in the site's static API
+  LastUpdateWindow:
+    Type: Number
+    Description: The time window in minutes since the last data update within which a backup will be considered necessary
+    Default: 10
+
+Resources:
+  BackupLambdaFunc:
+    Type: AWS::Lambda::Function
+    Properties:
+      Architectures:
+        - arm64
+      MemorySize: 450
+      Runtime: nodejs20.x
+      Handler: index.handler
+      Code:
+        ZipFile: |
+          exports.handler = async (event) => {
+            return true;
+          };
+      Environment:
+        Variables:
+          DELIVERY_TOKEN_ARN: !Ref ContentfulDeliveryTokenArn
+          MANAGEMENT_TOKEN_ARN: !Ref ContentfulManagementTokenArn
+          S3_BUCKET_NAME: !Ref S3BackupBucketName
+          S3_STORAGE_CLASS: !Ref InitialStorageClass
+          SPACE_ENV: !Ref ContentfulSpaceEnvironment
+          SPACE_ID: !Ref ContentfulSpaceId
+          SQS_QUEUE_URL: !GetAtt SQSQueue.QueueUrl
+      FunctionName: contentful-backup
+      Role: !GetAtt BackupLambdaRole.Arn
+      Timeout: 300
+
+  BackupLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: ContentfulBackupLambdaRole
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Policies:
+        - PolicyName: ContentfulBackupLambdaRolePolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                Resource:
+                  - !Sub ${BackupBucket.Arn}/*
+              - Effect: Allow
+                Action:
+                  - sqs:DeleteMessage
+                  - sqs:ReceiveMessage
+                  - sqs:GetQueueAttributes
+                Resource: !GetAtt SQSQueue.Arn
+              - Effect: Allow
+                Action:
+                  - ssm:GetParameters
+                Resource:
+                  - !Ref ContentfulDeliveryTokenArn
+                  - !Ref ContentfulManagementTokenArn
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                Resource:
+                  - !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:*
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource:
+                  - !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/contentful-backup:*
+
+  FilterLambdaFunc:
+    Type: AWS::Lambda::Function
+    Properties:
+      Architectures:
+        - arm64
+      Runtime: nodejs20.x
+      Handler: index.handler
+      Code:
+        ZipFile: |
+          exports.handler = async (event) => {
+            return true;
+          };
+      Environment:
+        Variables:
+          LAST_UPDATE_API_URL: !Ref LastUpdateUrl
+          LAST_UPDATE_WINDOW: !Ref LastUpdateWindow
+          SQS_QUEUE_URL: !GetAtt SQSQueue.QueueUrl
+      FunctionName: amplify-notification-filter
+      Role: !GetAtt FilterLambdaRole.Arn
+      Timeout: 30
+
+  FilterLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Policies:
+        - PolicyName: AmplifyNotificationFilterLambdaPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                Resource:
+                  - !Sub ${BackupBucket.Arn}/*
+              - Effect: Allow
+                Action:
+                  - sqs:SendMessage
+                Resource: !GetAtt SQSQueue.Arn
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                Resource:
+                  - !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:*
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource:
+                  - !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/amplify-notification-filter:*
+      RoleName: AmplifyNotificationFilterLambdaRole
+
+  SQSQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: contentfulBackupQueue.fifo
+      FifoQueue: true
+      MessageRetentionPeriod: 900
+      DeduplicationScope: queue
+      VisibilityTimeout: 450
+
+  BackupLambdaSQSTrigger:
+    Type: AWS::Lambda::EventSourceMapping
+    DependsOn: BackupLambdaRole
+    Properties:
+      BatchSize: 1
+      EventSourceArn: !GetAtt SQSQueue.Arn
+      Enabled: true
+      FunctionName: !GetAtt BackupLambdaFunc.Arn
+
+  FilterSNSTrigger:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt FilterLambdaFunc.Arn
+      Action: lambda:InvokeFunction
+      Principal: sns.amazonaws.com
+      SourceArn: !Ref SnsTopicArn
+
+  SNSSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      Protocol: lambda
+      Endpoint: !GetAtt FilterLambdaFunc.Arn
+      TopicArn: !Ref SnsTopicArn
+
+  BackupBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    Properties:
+      BucketName: !Ref S3BackupBucketName
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+          - Id: BackupsExpiration
+            Status: Enabled
+            ExpirationInDays: 1095
+            Transitions:
+              - TransitionInDays: 60
+                StorageClass: !Ref LongTermStorageClass
