@@ -41,6 +41,7 @@ Deploy the CloudFormation template providing the following template parameters:
 - `ContentfulManagementTokenArn`: The ARN of the parameter in SSM Parameter Store containing the management token.
 - `ContentfulSpaceEnvironment`: The name of the environment in the Contentful space to backup. To achieve a full backup of the space's configuration this must be `master`.
 - `InitialStorageClass`: The S3 storage class which the backup Lambda function shall set on backup files when they are first uploaded to the S3 bucket.
+- `LastUpdateWindow`: The time window, in minutes, since the last data update within which a backup is required.
 - `LastUpdateUrl`: The URL of the static API providing the last update timestamp(s) for the data in Contentful. Please see the filter Lambda function's README for more details.
 - `LongTermStorageClass`: The S3 storage class to transition backups to via the S3 bucket's lifecycle configuration.
 - `SnsTopicArn`: The ARN of the SNS topic, created by AWS Amplify, which shall serve as the event source to trigger the backup system.

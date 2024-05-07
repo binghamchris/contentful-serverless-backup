@@ -10,7 +10,7 @@ exports.handler = async (event) => {
       const dateNow = new Date();
       // Calculate the how long ago the last data update was in minutes
       let dateDiffMins = (dateNow - lastUpdateTimestamp) / (1000 * 60);
-      if(dateDiffMins < 10){
+      if(dateDiffMins < parseInt(process.env.LAST_UPDATE_WINDOW)){
         // If the last update was less than 10 minutes ago, queue a backup via SQS
         console.log(`Last data update was ${dateDiffMins} minutes ago; backup required`);
         // Connect to SQS

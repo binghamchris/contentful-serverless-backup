@@ -47,6 +47,10 @@ Parameters:
   LastUpdateUrl:
     Type: String
     Description: The URL of the last update index in the site's static API
+  LastUpdateWindow:
+    Type: Number
+    Description: The time window in minutes since the last data update within which a backup will be considered necessary
+    Default: 10
 
 Resources:
   BackupLambdaFunc:
@@ -137,6 +141,7 @@ Resources:
       Environment:
         Variables:
           LAST_UPDATE_API_URL: !Ref LastUpdateUrl
+          LAST_UPDATE_WINDOW: !Ref LastUpdateWindow
           SQS_QUEUE_URL: !GetAtt SQSQueue.QueueUrl
       FunctionName: amplify-notification-filter
       Role: !GetAtt FilterLambdaRole.Arn
