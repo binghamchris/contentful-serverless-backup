@@ -7,10 +7,11 @@ exports.handler = async (event) => {
   const isodate = datetime.toISOString().replaceAll('-', '/').replaceAll(':', '-').replace('T', '/');
   const s3Path = isodate.slice(0, 10);
   const filenameBase = isodate.slice(11);
+  const datePrefix = datetime.toISOString().slice(0, 10);
   const localBackupPath = '/tmp/backup';
   const contentfulExportFilename = `${filenameBase}.json`;
   const contentfulExportFilePath = `${localBackupPath}/${contentfulExportFilename}`;
-  const zipFilename = `${filenameBase}.zip`;
+  const zipFilename = `${datePrefix}_${filenameBase}.zip`;
   const zipFilePath = `${localBackupPath}/${zipFilename}`;
 
   try {
