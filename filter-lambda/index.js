@@ -89,7 +89,11 @@ function getLastUpdateTimestamp(url) {
   // Fetch the JSON file from the API
   console.log(`Getting URL: ${url}`)
   const fetch = require('sync-fetch');
-  const json = fetch(url).json();
+  const json = fetch(url, {
+    headers: {
+      'User-Agent': 'AWS-Lambda-Filter-Function/1.0'
+    }
+  }).json();
   console.debug(`URL content: ${JSON.stringify(json)}`)
   let latestUpdate;
   // Process the JSON to determine the most recent timestamp it contains
