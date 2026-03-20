@@ -10,17 +10,18 @@ const sqsClient = new SQSClient();
 const ssmClient = new SSMClient();
 
 // Extract SSM token parsing logic into a testable function
-// NOTE: Preserves existing buggy behavior (no break, for...in without own-property guard)
 const parseSSMParameters = (parameters, managementArn, deliveryArn) => {
   let contentfulManagementToken,
       contentfulDeliveryToken;
 
-  for(param in parameters) {
-    switch(parameters[param]['ARN']){
+  for (const param of Object.values(parameters)) {
+    switch(param['ARN']){
       case managementArn:
-        contentfulManagementToken = parameters[param]['Value'];
+        contentfulManagementToken = param['Value'];
+        break;
       case deliveryArn:
-        contentfulDeliveryToken = parameters[param]['Value'];
+        contentfulDeliveryToken = param['Value'];
+        break;
     }
   }
 
@@ -39,7 +40,7 @@ const generateS3Key = (date) => {
 
 // Function to return the outcome of the execution
 const sendResponse = (status, body) => {
-  var response = {
+  const response = {
     statusCode: status,
     body: body
   };
@@ -58,7 +59,7 @@ const uploadFile = async (buffer, key) => {
     })
   );
   // Report the result of the upload attempt, based on the HTTP status code
-  if(response['$metadata']['httpStatusCode'] = 200){
+  if(response['$metadata']['httpStatusCode'] === 200){
     console.log('File uploaded');
     return true;
   } else {
@@ -162,19 +163,19 @@ exports.handler = async (event) => {
       const deleteMessageResult = await deleteMessageAsync(event['Records'][0]['receiptHandle']);
       if(deleteMessageResult) {
         // If the message was deleted successfully, report success
-        sendResponse(200, `Backup successful: ${zipFilePath}`);
+        return sendResponse(200, `Backup successful: ${zipFilePath}`);
       } else {
         // Otherwise report failure
-        sendResponse(500, 'Failed to delete message from the backup queue');
+        return sendResponse(500, 'Failed to delete message from the backup queue');
       }
     } else {
       // If the file failed to upload to S3, report failure
-      sendResponse(500, 'Failed to upload backup to S3');
+      return sendResponse(500, 'Failed to upload backup to S3');
     }
   } catch (err) {
     // Report error
     console.error(`The following error occurred: ${err}`);
-    sendResponse(500, err);
+    return sendResponse(500, err);
   };
 };
 
