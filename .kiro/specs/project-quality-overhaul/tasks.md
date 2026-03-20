@@ -172,7 +172,7 @@ Incremental quality overhaul of the event-driven Contentful backup system. Each 
     - Verify non-zero exit on Lambda API failure (Req 16.2)
     - _Requirements: 14.4, 16.2_
 
-- [-] 8. Checkpoint — Verify build script changes
+- [x] 8. Checkpoint — Verify build script changes
   - Ensure all tests pass, ask the user if questions arise.
 
 - [ ] 9. Update documentation
