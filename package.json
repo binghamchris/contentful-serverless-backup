@@ -1,0 +1,12 @@
+{
+  "name": "contentful-backup-system",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Event-driven Contentful backup system for AWS Amplify-hosted apps",
+  "scripts": {
+    "test": "node --test 'tests/**/*.test.js'"
+  },
+  "devDependencies": {
+    "fast-check": "^3.22.0"
+  }
+}
