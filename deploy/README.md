@@ -1,9 +1,7 @@
 # System Deployment
 This directory contains the code needed to deploy the solution on AWS, including:
 
-- `deploy.yaml`: a CloudFormation template defining the AWS resources needed for the solution.
-- `build-backup-lambda.js`: a Node.js script which deploys the code for the backup Lambda function and it's dependencies into a Lambda function created by `deploy.yaml`.
-- `build-filter-lambda.js`: a Node.js script which deploys the code for the filter Lambda function and it's dependencies into a Lambda function created by `deploy.yaml`.
+- `build-lambda.js`: a Node.js script which deploys the code for a Lambda function and its dependencies into a Lambda function created by the CloudFormation template at `infrastructure/template.yaml`. It accepts a single argument (`backup` or `filter`) to select the target Lambda.
 
 ## Deployment Process
 There are four steps to deploying the solution:
@@ -65,5 +63,5 @@ Once the `.env` file is in place, run the following commands to build and deploy
 
 1. In the `backup-lambda` directory run: `npm i` to install its dependencies.
 2. In the `filter-lambda` directory run: `npm i` to install its dependencies.
-3. In the `deploy` directory run: `node build-backup-lambda.js` to deploy the backup Lambda function's code and dependencies.
-4. In the `deploy` directory run: `node build-filter-lambda.js` to deploy the filters Lambda function's code and dependencies.
+3. In the `deploy` directory run: `node build-lambda.js backup` to deploy the backup Lambda function's code and dependencies.
+4. In the `deploy` directory run: `node build-lambda.js filter` to deploy the filter Lambda function's code and dependencies.
