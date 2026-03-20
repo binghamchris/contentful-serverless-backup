@@ -1,3 +1,10 @@
+const {
+  SQSClient,
+  SendMessageCommand,
+} = require('@aws-sdk/client-sqs');
+
+const sqsClient = new SQSClient();
+
 exports.handler = async (event) => {
   console.log(process.env)
   try {
@@ -13,16 +20,6 @@ exports.handler = async (event) => {
       if(dateDiffMins < parseInt(process.env.LAST_UPDATE_WINDOW)){
         // If the last update was less than 10 minutes ago, queue a backup via SQS
         console.log(`Last data update was ${dateDiffMins} minutes ago; backup required`);
-        // Connect to SQS
-        /** 
-         * Sending the SQS message is done here in the handler instead of in a function
-         * as for some reason the SQS client fails when called in an async function...
-         */ 
-        const {
-          SQSClient,
-          SendMessageCommand,
-        } = require('@aws-sdk/client-sqs');
-        const sqsClient = new SQSClient();
         // Prepare a SQS message to queue a backup
         /**
          * Use a simple deduplication ID and group ID to leverage SQS's deduplication function
@@ -109,3 +106,8 @@ function getLastUpdateTimestamp(url) {
   console.log(`Last API update: ${latestUpdate}`);
   return latestUpdate;
 }
+
+// Named exports for testability
+exports.sendResponse = sendResponse;
+exports.processMessageAsync = processMessageAsync;
+exports.getLastUpdateTimestamp = getLastUpdateTimestamp;
