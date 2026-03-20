@@ -1,29 +1,114 @@
 const fs = require('fs');
 const contentfulExport = require('contentful-export');
+const { S3Client, PutObjectCommand } = require('@aws-sdk/client-s3');
+const { SQSClient, DeleteMessageCommand } = require('@aws-sdk/client-sqs');
+const { SSMClient, GetParametersCommand } = require('@aws-sdk/client-ssm');
+const AdmZip = require('adm-zip');
+
+const s3Client = new S3Client();
+const sqsClient = new SQSClient();
+const ssmClient = new SSMClient();
+
+// Extract SSM token parsing logic into a testable function
+// NOTE: Preserves existing buggy behavior (no break, for...in without own-property guard)
+const parseSSMParameters = (parameters, managementArn, deliveryArn) => {
+  let contentfulManagementToken,
+      contentfulDeliveryToken;
+
+  for(param in parameters) {
+    switch(parameters[param]['ARN']){
+      case managementArn:
+        contentfulManagementToken = parameters[param]['Value'];
+      case deliveryArn:
+        contentfulDeliveryToken = parameters[param]['Value'];
+    }
+  }
+
+  return { contentfulManagementToken, contentfulDeliveryToken };
+};
+
+// Extract S3 key generation logic into a testable function
+const generateS3Key = (date) => {
+  const isodate = date.toISOString().replaceAll('-', '/').replaceAll(':', '-').replace('T', '/');
+  const s3Path = isodate.slice(0, 10);
+  const filenameBase = isodate.slice(11);
+  const datePrefix = date.toISOString().slice(0, 10);
+  const zipFilename = `${datePrefix}_${filenameBase}.zip`;
+  return { s3Path, filenameBase, datePrefix, zipFilename };
+};
+
+// Function to return the outcome of the execution
+const sendResponse = (status, body) => {
+  var response = {
+    statusCode: status,
+    body: body
+  };
+  return response;
+};
+
+// Function to upload a file to S3
+const uploadFile = async (buffer, key) => {
+  // Attempt an upload to S3
+  const response = await s3Client.send(
+    new PutObjectCommand({
+      Bucket: process.env.S3_BUCKET_NAME,
+      StorageClass: process.env.S3_STORAGE_CLASS,
+      Key: key,
+      Body: buffer,
+    })
+  );
+  // Report the result of the upload attempt, based on the HTTP status code
+  if(response['$metadata']['httpStatusCode'] = 200){
+    console.log('File uploaded');
+    return true;
+  } else {
+    console.error(`File upload failure: ${response}`);
+    return false;
+  }
+};
+
+// Function to compress a single file into a zip archive
+const createZipArchive = (inputFolder, outputFile) => {
+  console.log(`Compressing: ${inputFolder}`);
+  const zip = new AdmZip();
+  zip.addLocalFolder(inputFolder);
+  console.log(`Output: ${outputFile}`);
+  zip.writeZip(outputFile);
+  console.log(`Created ${outputFile} successfully`);
+}
+
+async function deleteMessageAsync(receiptHandle) {
+  // Attempt to delete the message from the backup queue
+  const response = await sqsClient.send(
+    new DeleteMessageCommand({
+      QueueUrl: process.env.SQS_QUEUE_URL,
+      ReceiptHandle: receiptHandle,
+    })
+  );
+  // Report the result of the delete attempt, based on the HTTP status code
+  if(response['$metadata']['httpStatusCode'] == 200){
+    console.log(`Message deleted: ${JSON.stringify(response)}`);
+    return true;
+  } else {
+    console.error(`Message delete failure: ${JSON.stringify(response)}`);
+    return false;
+  }
+}
 
 exports.handler = async (event) => {
   // Create file names and paths
   const datetime = new Date();
-  const isodate = datetime.toISOString().replaceAll('-', '/').replaceAll(':', '-').replace('T', '/');
-  const s3Path = isodate.slice(0, 10);
-  const filenameBase = isodate.slice(11);
-  const datePrefix = datetime.toISOString().slice(0, 10);
+  const { s3Path, filenameBase, datePrefix, zipFilename } = generateS3Key(datetime);
   const localBackupPath = '/tmp/backup';
   const contentfulExportFilename = `${filenameBase}.json`;
   const contentfulExportFilePath = `${localBackupPath}/${contentfulExportFilename}`;
-  const zipFilename = `${datePrefix}_${filenameBase}.zip`;
   const zipFilePath = `${localBackupPath}/${zipFilename}`;
 
   try {
     if (!fs.existsSync(localBackupPath)){
       fs.mkdirSync(localBackupPath, { recursive: true });
     }
-  
-    const {
-      SSMClient,
-      GetParametersCommand,
-    } = require('@aws-sdk/client-ssm');
-    const ssmClient = new SSMClient();
+
     // Get the SecureString parameters containing the Contentful API tokens from SSM Parameter Store
     const ssmParameters = await ssmClient.send(
       new GetParametersCommand({
@@ -34,19 +119,13 @@ exports.handler = async (event) => {
         WithDecryption: true,
       }),
     );
-  
+
     // Parse the SSM response to extract the parameter values
-    let contentfulManagementToken,
-        contentfulDeliveryToken;
-    
-    for(param in ssmParameters['Parameters']) {
-      switch(ssmParameters['Parameters'][param]['ARN']){
-        case process.env.MANAGEMENT_TOKEN_ARN:
-          contentfulManagementToken = ssmParameters['Parameters'][param]['Value'];
-        case process.env.DELIVERY_TOKEN_ARN:
-          contentfulDeliveryToken = ssmParameters['Parameters'][param]['Value'];
-      }
-    }
+    const { contentfulManagementToken, contentfulDeliveryToken } = parseSSMParameters(
+      ssmParameters['Parameters'],
+      process.env.MANAGEMENT_TOKEN_ARN,
+      process.env.DELIVERY_TOKEN_ARN
+    );
 
     // Set options for the Contentful export
     const contentfulExportOptions = {
@@ -75,7 +154,7 @@ exports.handler = async (event) => {
     console.log('Preparing file for AWS S3');
     let fileBuffer = new Buffer.from(fs.readFileSync(zipFilePath));
     fs.unlinkSync(zipFilePath);
-    
+
     // Upload the zip archive to S3
     const uploadFileResult = await uploadFile(fileBuffer, `${s3Path}/${zipFilename}`);
     if(uploadFileResult){
@@ -99,72 +178,9 @@ exports.handler = async (event) => {
   };
 };
 
-// Function to return the outcome of the execution
-const sendResponse = (status, body) => {
-  var response = {
-    statusCode: status,
-    body: body
-  };
-  return response;
-};
-
-// Function to upload a file to S3
-const uploadFile = async (buffer, key) => {
-  const {
-    S3Client,
-    PutObjectCommand,
-  } = require('@aws-sdk/client-s3');
-  const s3Client = new S3Client();
-  // Attempt an upload to S3
-  const response = await s3Client.send(
-    new PutObjectCommand({
-      Bucket: process.env.S3_BUCKET_NAME,
-      StorageClass: process.env.S3_STORAGE_CLASS,
-      Key: key,
-      Body: buffer,
-    })
-  );
-  // Report the result of the upload attempt, based on the HTTP status code
-  if(response['$metadata']['httpStatusCode'] = 200){
-    console.log('File uploaded');
-    return true;
-  } else {
-    console.error(`File upload failure: ${response}`);
-    return false;
-  }
-};
-
-// Function to compress a single file into a zip archive
-const createZipArchive = (inputFolder, outputFile) => {
-  const AdmZip = require('adm-zip');
-  console.log(`Compressing: ${inputFolder}`);
-  const zip = new AdmZip();
-  zip.addLocalFolder(inputFolder);
-  console.log(`Output: ${outputFile}`);
-  zip.writeZip(outputFile);
-  console.log(`Created ${outputFile} successfully`);
-}
-
-async function deleteMessageAsync(receiptHandle) {
-  // Connect to SQS
-  const {
-    SQSClient,
-    DeleteMessageCommand,
-  } = require('@aws-sdk/client-sqs');
-  const sqsClient = new SQSClient();
-  // Attempt to delete the message from the backup queue
-  const response = await sqsClient.send(
-    new DeleteMessageCommand({
-      QueueUrl: process.env.SQS_QUEUE_URL,
-      ReceiptHandle: receiptHandle,
-    })
-  );
-  // Report the result of the delete attempt, based on the HTTP status code
-  if(response['$metadata']['httpStatusCode'] == 200){
-    console.log(`Message deleted: ${JSON.stringify(response)}`);
-    return true;
-  } else {
-    console.error(`Message delete failure: ${JSON.stringify(response)}`);
-    return false;
-  }
-}
+// Named exports for testability
+exports.parseSSMParameters = parseSSMParameters;
+exports.generateS3Key = generateS3Key;
+exports.sendResponse = sendResponse;
+exports.uploadFile = uploadFile;
+exports.deleteMessageAsync = deleteMessageAsync;
