@@ -175,18 +175,18 @@ Incremental quality overhaul of the event-driven Contentful backup system. Each 
 - [x] 8. Checkpoint — Verify build script changes
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 9. Update documentation
-  - [~] 9.1 Create `deploy/.env.example` with placeholder values
+- [x] 9. Update documentation
+  - [x] 9.1 Create `deploy/.env.example` with placeholder values
     - Include `AWS_PROFILE_NAME`, `BACKUP_LAMBDA_FUNC_NAME`, `FILTER_LAMBDA_FUNC_NAME` with placeholder values
     - _Requirements: 21.1, 21.2_
 
-  - [~] 9.2 Update `deploy/README.md`
+  - [x] 9.2 Update `deploy/README.md`
     - Fix "it's dependencies" → "its dependencies" in all occurrences
     - Update CloudFormation template path reference from `deploy/deploy.yaml` to `infrastructure/template.yaml`
     - Update build script instructions to reference unified `build-lambda.js` instead of individual scripts
     - _Requirements: 22.1, 17.2, 14.2_
 
-  - [~] 9.3 Write unit tests for documentation
+  - [x] 9.3 Write unit tests for documentation
     - File: `tests/backup-lambda/handler.unit.test.js` and `tests/filter-lambda/handler.unit.test.js` (add doc-related assertions)
     - Verify `.env.example` exists with all required variables (Req 21.1, 21.2)
     - Verify README contains "its dependencies" not "it's dependencies" (Req 22.1)
