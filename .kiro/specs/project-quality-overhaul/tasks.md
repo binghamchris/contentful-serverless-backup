@@ -193,8 +193,8 @@ Incremental quality overhaul of the event-driven Contentful backup system. Each 
     - Verify template file exists at `infrastructure/template.yaml` (Req 17.1)
     - _Requirements: 21.1, 21.2, 22.1, 17.1_
 
-- [ ] 10. Write remaining handler unit tests for both Lambdas
-  - [~] 10.1 Write unit tests for backup-lambda handler
+- [x] 10. Write remaining handler unit tests for both Lambdas
+  - [x] 10.1 Write unit tests for backup-lambda handler
     - File: `tests/backup-lambda/handler.unit.test.js`
     - Verify Contentful export options object has exact expected keys/values (Req 0.2)
     - Verify handler returns sendResponse result (Req 3.1)
@@ -202,14 +202,14 @@ Incremental quality overhaul of the event-driven Contentful backup system. Each 
     - Verify unknown ARN in SSM response is skipped (Req 1.3)
     - _Requirements: 0.2, 0.7, 1.3, 3.1_
 
-  - [~] 10.2 Write unit tests for filter-lambda handler
+  - [x] 10.2 Write unit tests for filter-lambda handler
     - File: `tests/filter-lambda/handler.unit.test.js`
     - Verify handler returns sendResponse result (Req 3.2)
     - Verify SQS message uses correct deduplication and group IDs (Req 0.4)
     - Verify sync-fetch is not in filter-lambda package.json (Req 13.3)
     - _Requirements: 0.4, 3.2, 13.3_
 
-- [~] 11. Final checkpoint — Ensure all tests pass
+- [x] 11. Final checkpoint — Ensure all tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
 ## Notes
