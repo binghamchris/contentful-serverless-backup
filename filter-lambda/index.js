@@ -6,14 +6,13 @@ const {
 const sqsClient = new SQSClient();
 
 exports.handler = async (event) => {
-  console.log(process.env)
   try {
     // Process the first SNS message to determine if the Amplify build succeeded by
     const messageResult = await processMessageAsync(event['Records'][0]);
     if(messageResult){
       // If the Amplify build succeeded, continue
       // Get the timestamp for the last update to the Contentful data
-      const lastUpdateTimestamp = getLastUpdateTimestamp(process.env.LAST_UPDATE_API_URL);
+      const lastUpdateTimestamp = await getLastUpdateTimestamp(process.env.LAST_UPDATE_API_URL);
       const dateNow = new Date();
       // Calculate the how long ago the last data update was in minutes
       let dateDiffMins = (dateNow - lastUpdateTimestamp) / (1000 * 60);
@@ -38,20 +37,20 @@ exports.handler = async (event) => {
         // Report the result of the message send attempt, based on the HTTP status code
         if(response['$metadata']['httpStatusCode'] == 200){
           console.debug(`Message sent: ${JSON.stringify(response)}`);
-          sendResponse(200, 'Backup queued');
+          return sendResponse(200, 'Backup queued');
         } else {
           console.error(`Message send failure: ${JSON.stringify(response)}`);
-          sendResponse(500, 'Failed to queue backup');
+          return sendResponse(500, 'Failed to queue backup');
         };
       } else {
         // If the last update was more than 10 minutes ago, log this and report successful completion
         console.log(`Last data update was ${dateDiffMins} minutes ago; no backup needed`);
-        sendResponse(200, 'No backup required');
+        return sendResponse(200, 'No backup required');
       }
     } else {
       // Otherwise, log that no backup is required and report successful completion
       console.log('No backup required')
-      sendResponse(200, 'No backup required');
+      return sendResponse(200, 'No backup required');
     }
   } catch (err) {
     console.error(`The following error occurred: ${err}`);
@@ -61,7 +60,7 @@ exports.handler = async (event) => {
 
 // Function to return the outcome of the execution
 const sendResponse = (status, body) => {
-  var response = {
+  const response = {
     statusCode: status,
     body: body,
   };
@@ -82,20 +81,20 @@ async function processMessageAsync(record) {
   }
 }
 
-function getLastUpdateTimestamp(url) {
+async function getLastUpdateTimestamp(url) {
   // Fetch the JSON file from the API
   console.log(`Getting URL: ${url}`)
-  const fetch = require('sync-fetch');
-  const json = fetch(url, {
+  const response = await fetch(url, {
     headers: {
       'User-Agent': 'AWS-Lambda-Filter-Function/1.0'
     }
-  }).json();
+  });
+  const json = await response.json();
   console.debug(`URL content: ${JSON.stringify(json)}`)
   let latestUpdate;
   // Process the JSON to determine the most recent timestamp it contains
-  for(table in json) {
-    thisTableUpdate = new Date(json[table]['lastUpdatedAt']);
+  for (const [table, value] of Object.entries(json)) {
+    let thisTableUpdate = new Date(value['lastUpdatedAt']);
     if (!(latestUpdate)){
       latestUpdate = thisTableUpdate;
     } else if (thisTableUpdate > latestUpdate){
