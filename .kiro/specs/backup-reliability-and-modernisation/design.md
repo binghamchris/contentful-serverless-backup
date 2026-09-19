@@ -1,6 +1,6 @@
 # Design Document
 
-> **Status: pass 1 of 4.** This pass covers the overview, the component architecture, the end-to-end event flow, and the notification topology — including the encrypted-topic question that Requirement 6.3 obliges the design to settle rather than leave to verification. Passes 2–4 cover the Coverage_Check, the backup pipeline, and the infrastructure, deployment, cost and quota tables.
+> **Status: pass 1 of 5.** This pass covers the overview, the component architecture, the end-to-end event flow, and the notification topology — including the encrypted-topic question that Requirement 6.3 obliges the design to settle rather than leave to verification. Passes 2–4 cover the Coverage_Check, the backup pipeline, and the infrastructure, deployment, cost and quota tables.
 
 ## Overview
 
@@ -678,3 +678,146 @@ Two items are deliberately unresolved, both gated on a first deployment rather t
 2. **The size and duration envelope**, and therefore the final `MemorySize` and `EphemeralStorageSize` values. The commissioning export produces them.
 
 Everything else in Requirements 0–57 now has a mechanism. The next artefact is `tasks.md`, which must respect one sequencing constraint the requirements state and a task list would otherwise violate: the runtime upgrade, the export-library major, the archive-library replacement and the streamed upload are **one atomic change**, because the library requires the newer runtime and separating them leaves the suite failing between commits.
+
+---
+
+# Pass 5 — Audit Corrections
+
+> **Status: pass 5 of 5.** A four-way audit of passes 1–4 found no flaw that invalidates the architecture, but it found one composite failure that produces permanent silent loss, several library and platform claims that were true of an earlier version and carried forward, and about seventeen requirements the design named but did not give a mechanism. This pass supersedes the earlier passes wherever they conflict. The four audit reports are preserved under `docs/analysis/design-audit-2026-09-19/`.
+>
+> **The governing lesson, stated once:** every factual error the audit found was a claim that was true, or true of a different version, re-used without re-grounding. The one part of passes 1–4 that read the library's actual source rather than its docs — the silent-success diagnosis — is the only part with no errors. Pass 5 re-grounds; the tasks derived from it must verify against source and current docs, not against this document's prose.
+
+## 5.1 The suppression hole — the one that produces permanent silent failure
+
+Passes 2 and 4 suppressed the coverage-gap email whenever the same invocation enqueued a backup, on the reasoning that the enqueue closes the gap. It does not close the gap; it *intends* to. Break the path between the enqueue and a stored archive — the event source mapping left disabled after a first deployment, the mapping deleted or mis-wired, reserved concurrency at zero, the FIFO group wedged, or the backup function running placeholder code — and the sequence is: SQS accepts the message, the Filter suppresses the email because it enqueued, the backup never runs, and the next build repeats it against the same still-newer content timestamp. The result is **no backup, ever, and no email, ever**. The caught-failure path needs the function to execute; the dead-letter path needs deliveries to exhaust; under a broken mapping neither happens.
+
+This is the failure criterion 9.10 was written to prevent — "the same invocation *is closing* the gap" — and the earlier design implemented the weaker "intends to close". The fix makes suppression stateful and time-bounded, using the suppression store that already exists:
+
+- THE suppression store value becomes `{ notifiedContentChange, notifiedAt, enqueuedContentChange, enqueuedAt }`.
+- WHEN the Filter enqueues a backup for a content state, it records `enqueuedContentChange` and `enqueuedAt`.
+- THE coverage-gap notification is suppressed for a content state ONLY IF an enqueue for that same state was recorded within the grace period. Once the grace period elapses with the archive still absent, the next build notifies.
+
+So an enqueue buys silence for one grace period, not forever. A working pipeline closes the gap inside that window and the archive's key advances past the content timestamp, so no email is ever sent. A broken pipeline is reported one grace period later — the whole point of the mechanism. This also subsumes the "backup genuinely in flight" false-positive: the in-flight backup is covered by the same grace window rather than by an unconditional veto.
+
+This became **Requirement 9's** governing correction and the requirements are updated to match: criterion 9.10 now reads as time-bounded suppression, and the "what no path covers" section (criterion 11.12) no longer claims the enqueue path is safe.
+
+## 5.2 Poison keys — an archive the system itself rejected still satisfies the check
+
+The Coverage_Check's `found` outcome is a statement about a key, and a key carries no verdict. Two archives the pipeline judged bad nonetheless land a conforming key and permanently satisfy coverage:
+
+- **The rate-limited partial archive.** Criterion 15.4 uploads it with `complete: false` rather than throwing. Its key becomes the newest, and from then on the space reads as covered — but the "wait for quota" email is a lie, because nothing retries until the next content change.
+- **The verification-failed archive.** The object is in the bucket under a conforming key; no role can delete it (deliberately, Requirement 40); it suppresses detection for its content state and every earlier one.
+
+Both are closed cheaply, using the listing the check already performs:
+
+- A partial or unverified archive SHALL be written under a key the `ARCHIVE_KEY` pattern **excludes** — a `.partial.zip` suffix rather than `.zip`. It is still stored and still emailed, but it does not satisfy coverage, so the next build of either site re-enqueues. That is the deferred retry the "wait for quota" remedy wanted, arriving naturally on the next build rather than never. The suffix is documented alongside the key format under criterion 13.3.
+- THE Coverage_Check SHALL require `Size` above a documented floor from the listing (`ListObjectsV2` returns `Size` for free, including for Glacier objects), so a truncated object does not read as covered. A nonzero-but-wrong-size object cannot be repaired without a delete grant; that residue is stated in the decision record rather than left undiscovered.
+
+## 5.3 The content timestamp is produced by the pipeline it audits
+
+The Last_Update_API is the website's own build output. If one site's build fails or its last-update step breaks, the Filter reads that site's **stale** JSON, sees the old timestamp, and reports the space covered indefinitely — a fresh invocation against a frozen input, which the residual-risk section did not name.
+
+- THE Filter SHALL read the last-update timestamp as the **maximum across both consuming sites'** endpoints, from two template parameters. One site's broken build then cannot freeze the comparison. This preserves the deliberate decision that the URL is a fixed parameter rather than derived from the notification — these are two fixed production endpoints.
+- WHERE a payload carries its own build or publish timestamp older than the notifying build's start, the Filter SHALL treat it as stale, log it, and fail open on the enqueue side rather than trusting it for coverage.
+- THE decision record SHALL state that the only structural fix — decoupling detection from the build pipeline — is the deferred Contentful-webhook trigger.
+
+## 5.4 A guard against an unparseable key
+
+`found` is decided by the regex; the parse of the timestamp out of the key is never validated, and the key form uses hyphens as time separators that `new Date()` will not parse, so `timestampFromKey` reconstructs it by hand. A bug there yields `NaN`, and `NaN < contentTs` is `false` — the check goes silent, the worst direction.
+
+- A key that matches the pattern but does not parse to a valid date SHALL be treated as `indeterminate` with the reason logged, not as `found`. THE pure comparison function SHALL assert `Number.isFinite` on the parsed timestamp at its boundary. This is criterion 49.2's concern encoded in the outcome contract rather than only in the tests.
+
+## 5.5 Retention — do not expire current versions at all
+
+Criterion 34.9's "retain the newest archive unconditionally" has no S3 lifecycle primitive — lifecycle predicates are age, prefix, tag and size, none of which is "newest". Tagging the newest object would need `s3:PutObjectTagging`, which no role holds and which cuts against the immutability intent. The mechanism resolves the conflict by removing the need for it:
+
+- THE lifecycle configuration SHALL NOT expire current object versions at all. It SHALL expire noncurrent versions, remove expired delete markers, and abort incomplete multipart uploads. At 8–25 backups a year of tens of megabytes each, total steady-state storage is a few gigabytes, so current-version expiry buys almost nothing and creates the entire "every archive expired during a quiet period → coverage emails a gap on every build" hazard. Removing it satisfies criterion 34.9 structurally.
+- criterion 34.9 is amended: the retention *minimum* is no longer the mitigation, because current versions are not expired. The requirement's "retain the newest archive unconditionally" is met by construction.
+
+## 5.6 The four numbers the whole timing chain hangs on
+
+Passes 1–4 never stated the Backup_Lambda `Timeout`, and every queue value derives from it. Concrete values, with the couplings the requirements require commented in the template:
+
+| Value | Value | Basis |
+|---|---|---|
+| Backup_Lambda `Timeout` | **900 s** | The Lambda maximum; a full-space export with asset downloads is the long pole, and the commissioning export confirms headroom |
+| Backup_Lambda `MemorySize` | interim **1024 MB**, finalised by the commissioning export | Streaming caps memory at `partSize × queueSize` (~20 MB) plus the export object; the interim value deploys, the export measures, a second stack update sets the final |
+| Backup_Lambda `EphemeralStorageSize` | interim **2048 MB**, finalised by the export | `/tmp` holds the export tree plus the archive; interim then measured |
+| `SQSQueue` `VisibilityTimeout` | **5400 s** | ≥ 6 × 900, per criterion 3.3 |
+| `SQSQueue` `MessageRetentionPeriod` | **1209600 s (14 days)** | The maximum, not the `2 × visibility × maxReceiveCount` floor — see 5.7 |
+| `maxReceiveCount` (source queue) | **2** | Bounded parameter; each retry is another export, so 2 caps failure-path quota at two exports |
+| DLQ `VisibilityTimeout` | **60 s** | Just above the Notifier's own short timeout — see 5.8 |
+| DLQ `maxReceiveCount` | **2** | Redrive to the Terminal_Queue after two failed Notifier attempts |
+| Notifier / Filter `Timeout` | **30 s** | Small functions; the Filter budget is computed in 5.9 |
+| `MemorySize` — Filter, Notifier | **256 MB** each | Explicit rather than the implicit 128 default; covers four-client cold start |
+| `ReservedConcurrentExecutions` — Backup | **1** | Makes the FIFO single-group serialisation explicit at the function |
+| `ReservedConcurrentExecutions` — Filter | **≥ number of consuming sites + margin** | Below this a concurrent second build is throttled, and a throttled async invoke fires the Notifier — an email caused by two sites building at once |
+| Grace period | default **30 min**, bounded 5 min–24 h | ≥ worst build + export + archive + upload + margin; the commissioning build-duration measurement sets it |
+| Skew tolerance | default **5 s**, bounded 1–60 s | NTP skew only; explicitly NOT the mechanism for build-artefact staleness, which is 5.3 |
+| Re-notify interval | default **24 h**, bounded 1–168 h | How often a persistent gap re-emails |
+| `maxReceiveCount` values | declared as bounded parameters | per criterion 3.2 |
+| Log retention | default **90 days**, `AllowedValues` from the set CloudWatch Logs accepts | criterion 5.2 |
+| Published-version retention | keep **3**, prune older | quota, not cost — see 5.11 |
+| `MAX_PAGES` | **5** | unchanged |
+| `maxAllowedLimit` | **200**, bounded 1000, adaptive halving to a floor of **50** | unchanged; floor now stated |
+
+The **worst-case notification latency** criterion 3.7 requires, now computable: a killed invocation is invisible for the full 5400 s visibility timeout, twice, so a crash-class failure emails at roughly **3 hours** plus the DLQ head-of-line bound (5.8); a caught failure emails in **seconds**. The 6× visibility multiplier is inherited from Prior_Spec Requirement 20 and, for a *killed* invocation, buys nothing while multiplying crash-notification latency sixfold — recorded as an accepted cost, since relaxing it touches a frozen prior requirement and the crash classes are rare.
+
+## 5.7 Retention at the maximum, not the floor
+
+A message that hits its retention limit is **deleted by SQS with no redrive** — redrive is triggered only by receive-count exhaustion. At the computed floor (~6 h) a mapping disabled for longer loses the request silently. Retention is therefore set to the 14-day maximum: free, satisfies the redelivery arithmetic with enormous margin, and converts a six-hour silent-loss window into a fortnight during which 5.1's stateful suppression surfaces the gap. A template comment records that the floor is a lower bound, not a target.
+
+## 5.8 The Notifier must fail open, and the DLQ block must be bounded
+
+The Notifier is the terminus of every failure path, and a throwing Notifier routes its own message to the unobserved Terminal_Queue — silence. On a first deployment all three functions are the placeholder simultaneously.
+
+- THE Notifier placeholder SHALL **publish** "Notifier code was never applied", not throw. Its role holds `sns:Publish` and the KMS actions, and the runtime SDK is available to inline code. This is the one placeholder that fails open.
+- THE DLQ event source mapping SHALL set `BatchSize: 1` and the DLQ `VisibilityTimeout: 60 s` with `maxReceiveCount: 2`, so a poison message blocks the FIFO group for at most ~2 minutes before moving to the Terminal_Queue, and one unprocessable message cannot cause the batch alongside it to be re-notified (the SQS default batch size of 10 without `ReportBatchItemFailures` would re-notify up to nine good messages per retry round).
+- THE DLQ event source mapping SHALL be gated by the same `EventSourceMappingEnabled` parameter as the backup mapping, or a companion parameter, so a first deployment does not run dead-letter traffic against placeholder Notifier code.
+- criterion 10.10's manual check SHALL include reading `ApproximateNumberOfMessages` on the Terminal_Queue — its depth is the only observable signal that notification is broken, since Requirement 11 forbids the alarm that would watch it. The decision record states the Terminal_Queue is an unobserved sink and why.
+
+## 5.9 The Filter time budget, computed rather than deferred
+
+The Filter now performs a cold start with four SDK clients, a fetch with retries against **two** endpoints (5.3), an S3 listing, an SSM read, and possibly a publish and an SSM write, in 30 s. Passes 1–4 bounded only the fetch and left the three AWS calls on SDK defaults, where a throttled call can consume tens of seconds — and a Filter timeout is an unhandled crash that emails on every slow-endpoint build, the routine traffic criterion 57.13 forbids.
+
+- ALL AWS clients in the Filter SHALL be constructed with an explicit `connectionTimeout` and `requestTimeout` and `maxAttempts: 2`, derived from the same budget as the fetch timeout.
+- THE handler SHALL carry an overall deadline. On budget exhaustion it SHALL **return** — fail open, log at error level, no notification — never be killed. A timeout is the only Filter outcome that emails, so it must be unreachable by a slow dependency.
+- THE two last-update fetches SHALL share the fetch half of the budget (per endpoint ≈ 3 s × 2 attempts + short backoff), leaving the other half for the cold start, the listing, the read and any publish.
+
+## 5.10 The library corrections — the silent ones
+
+These fail silently and defeat the backup rather than costing money, so they are stated as design decisions to be verified against source at implementation, not assertions:
+
+- **Asset completeness by size, not existence.** The library opens the write stream before the GET and never unlinks on failure, so a failed download is a **zero-byte** file, not a missing one, and a stalled transfer is a **non-zero partial**. Comparison SHALL be `st.size === asset.fields.file[locale].details.size` (the expected size is already in the returned data), with zero as the degenerate case. An asset entry lacking a `url` SHALL be counted, not skipped, since the library treats that as an error.
+- **Experience Orchestration and the request budget.** `contentful-export` v8 defaults `includeExperienceOrchestration: true`, adding six entity sets plus roles and releases — ~13 CMA task groups, not ~5. THE Backup_Lambda SHALL set `includeExperienceOrchestration: false` unless a measured need is recorded, so criterion 0.6's "no increase on the success path" holds across the major upgrade, and the manifest `counts` SHALL enumerate every entity type actually exported. THE design records that roles and webhooks are skipped when the environment is not `master`, so a non-master backup silently omits them.
+- **Tags.** The library source and its README disagree on whether tags export when a delivery token is supplied. THE commissioning export SHALL run with and without the delivery token and count tags in each, and the result SHALL be recorded before the published-state switch is finalised. IF tags are dropped, the switch SHALL be reconsidered, because losing tags is a data-loss regression from a change presented as a pure win.
+
+## 5.11 The framing and platform corrections — the ones that only affect the docs
+
+- **KMS grant shape.** The `kms:GenerateDataKey*`/`kms:Decrypt` grant SHALL be scoped to `arn:${AWS::Partition}:kms:${AWS::Region}:${AWS::AccountId}:key/*` with a `kms:ViaService` condition — not `Resource: "*"`, which a template lint flags as an over-grant. The AWS-managed key admits in-account identities arriving via SNS through its own `kms:ViaService` policy, so the grant's sufficiency is established rather than "asserted"; the commissioning publication is a smoke test, and it SHALL be performed **by each publishing role**, not by the operator's credentials, or it proves nothing.
+- **Multipart checksum.** S3 does support a whole-object checksum on a multipart upload (CRC64NVME, the default), so the earlier "composite, cannot compare" reasoning is wrong. Verification stays existence-and-size for a different reason: reading the stored checksum back needs a `GetObject`-family permission criterion 40.9 withholds. The manifest claims no digest.
+- **Published-version storage** is a Lambda **quota** (300 GB/region) that fails deploys when exhausted, not a recurring charge. criterion 31.7's cost framing is corrected to quota framing; pruning to 3 versions stands.
+- **The SQS polling estimate.** An event source mapping runs 2–5 pollers, not one, so two enabled mappings are **0.5 M–1.3 M requests/month** against the 1 M free tier — the pair may sit just above it, exposure under $0.20/month. The cost table drops the unconditional "$0.00 at rest" for a "≤ ~$0.20/month, to confirm against the first bill" line, and the customer-managed-key contingency ($1/month if the AWS-managed key path fails) is added to the table rather than left in prose.
+- **Lifecycle transition charges.** `BackupRetentionDays` SHALL be bounded so no permitted value places an object in Glacier Flexible Retrieval for less than its 90-day minimum given the 60-day transition — i.e. a minimum retention of ~150 days — closing the early-deletion charge. The transition day and `LongTermStorageClass` become the parameters the cost table already assumes.
+- **`AbortIncompleteMultipartUpload`.** A one-day abort rule is added to the lifecycle configuration; a killed upload's orphaned parts are billed indefinitely and are invisible to `ListObjectsV2`, so nothing else would ever see them.
+- **Cross-reference fixes** in the design and requirements: the KMS-deferral citation (→ 42.13), the Object Lock test citation (→ 36.15), the commissioning-export authorisation (→ 16.12 not 16.9), the `s3:GetObject` prohibition (→ 40.9 not 40.8), and the notification content contract (→ 7.11 not 7.9). The Notifier covers **three** failure classes plus the async path, not "two". The flow diagram's `Notifier → Terminal_Queue` edge is wrong — SQS moves the message via the DLQ's redrive policy; the Notifier holds no `sqs:SendMessage`.
+
+## 5.12 The coverage gap — the seventeen requirements passes 1–4 named but did not mechanise
+
+Passes 1–4 specified the novel mechanisms in depth and asserted, wrongly, that "everything else now has a mechanism". Parts D, E, G, H and I were largely uncovered. Rather than restate each, this pass records that they are **routine and their mechanism is their requirement**, and names the load-bearing choices a task list needs:
+
+- **The atomic dependency change (Requirements 23–27).** Target runtime `nodejs24.x`; target `contentful-export` the current 8.x major; archive library `archiver` (streaming) replacing `adm-zip`, not joining it; the AWS SDK v3 clients declared as dependencies rather than relied on from the runtime. **Verify before the task list is written:** whether `contentful-export` v8 is ESM-only, because `backup-lambda/index.js` is CommonJS and an ESM-only major forces the handler to ESM as part of the same atomic change. The `npm ci --os=linux --cpu=arm64` step selects optional dependencies but does not cross-compile native addons — the commissioning deploy SHALL assert the function starts on arm64.
+- **Deployment validation, static analysis, CI, docs, decision record, residual-code sweep (Requirements 28, 30, 33, 44, 45, 52, 53, 54, 55, 56).** These are conventional and were fully specified in the requirements; the design adds nothing but the note that they are in scope and must appear in the task list. The residual sweep includes the same dead status-code branch in `deploy/build-lambda.js` that criterion 1.4 removes from the Backup_Lambda.
+- **External-contract fixtures (Requirement 51),** including the async invocation record the Notifier must discriminate — passes 1–4 asserted a fact about that record's shape ("no log stream identifier") that only a committed fixture can hold the implementation to.
+
+## 5.13 What is settled, and what remains gated on first deployment
+
+Settled by the audit: the KMS grant sufficiency (established, smoke-tested), Object Lock in-place enablement, the S3 listing guarantees, the log class behaviour, the streamed upload. Still genuinely gated on the commissioning deployment, and now enumerated so a task list can sequence them:
+
+1. The final `MemorySize` and `EphemeralStorageSize`, from the measured envelope. The design deploys with interim values first — this is a **two-pass deployment**, stated as such.
+2. Whether tags survive the published-state switch (5.10).
+3. The measured Amplify build duration for each site, which sets the grace period (5.6).
+4. The largest `maxAllowedLimit` that succeeds for this space — established by a **single** export at a high configured value that adaptively halves and reports where it settled, not by a search across values, so it stays within the one-export authorisation.
+5. That each publishing role can publish under the encrypted topic's key (5.11).
+
+The commissioning export runs **once**, through the queue so it exercises the real path, records its outputs to `docs/`, and its measurements feed the second stack update. Everything it measures is enumerated above; nothing else requires an untriggered export.
