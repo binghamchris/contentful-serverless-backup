@@ -682,17 +682,21 @@ The Prior_Spec's Requirement 0 froze the system as strictly non-functional. Seve
 7. THE bucket policy SHALL be expressed as conditions on requests, not as denials of named principals.
 8. THE bucket policy SHALL NOT deny the Filter_Lambda's listing required by criterion 9.18, nor the Backup_Lambda's verification listing required by criterion 13.5.
 
-### Requirement 38: Access to Backups Shall Be Auditable
+### Requirement 38: Access Recording Is Deliberately Excluded
 
-**User Story:** As the project owner, I want a record of who read, listed or deleted a backup, so that I can answer that question when it matters.
+**User Story:** As the project owner, I want no access-recording infrastructure, so that the solution does not carry a second bucket, a second lifecycle policy and a recurring storage charge for a forensic capability I have judged not worth it at my access volume.
+
+The review recommended recording who reads, lists or deletes a backup. That recommendation is acknowledged and declined. This requirement is retained at its number, rather than removed, so the decision is visible rather than an absence.
 
 #### Acceptance Criteria
 
-1. THE CloudFormation_Template SHALL configure access recording for the Backup_Bucket.
-2. THE recording destination SHALL NOT be the Backup_Bucket itself.
-3. THE recording mechanism SHALL be one that carries no per-event charge. A per-event mechanism SHALL NOT be selected on any justification, because criteria 11.9 and 57.5 permit no such recurring charge, and the Coverage_Check generates a listing event on every build of either consuming site.
-4. THE recording destination SHALL have its own bounded retention, and its storage SHALL appear in the cost table required by criterion 57.5, since access records are neither archives nor CloudWatch Logs and fall outside the existing exclusions.
-5. THE design SHALL account for the listing traffic the Coverage_Check adds, since it occurs on every build.
+1. THE CloudFormation_Template SHALL NOT configure S3 server access logging on the Backup_Bucket.
+2. THE CloudFormation_Template SHALL NOT configure CloudTrail data events for the Backup_Bucket, which would in any case be forbidden by criterion 11.9's prohibition on a per-event charge.
+3. THE CloudFormation_Template SHALL NOT create a log destination bucket, nor any resource whose sole purpose is to hold access records.
+4. NO recurring storage charge SHALL arise from access recording, and the cost table required by criterion 57.5 SHALL contain no line for it.
+5. A test SHALL assert that the template declares no `LoggingConfiguration` on the Backup_Bucket and no second bucket.
+6. THE decision record required by criterion 56.3 SHALL state what this forfeits: there will be no record of who read, listed or deleted a backup, so that question cannot be answered after the fact — including in a compromise, which is when it would matter most. IT SHALL state the access volume that made the trade reasonable, and that the S3 request traffic the Coverage_Check generates is accounted for in the cost table under criterion 57.5 rather than here.
+7. THE decision record SHALL state the forward path: server access logging is a `LoggingConfiguration` property plus a destination bucket and can be added later without migrating data, so this exclusion is reversible at any time.
 
 ### Requirement 39: Queue Confidentiality and Operability
 
@@ -965,7 +969,7 @@ The Prior_Spec's Requirement 0 froze the system as strictly non-functional. Seve
 
 1. THE repository SHALL contain a changelog recording changes that affect the archive format, the backup's content scope, the notification behaviour, or the deployment procedure.
 2. THE changelog SHALL record that the archive's content scope changes to published-state only.
-3. THE repository SHALL contain a decision record under `docs/` capturing: the supersession in Requirement 0; the Contentful quota constraint and the consequent prohibition on scheduled, periodic or synthetic backups; the decision to notify by event-driven email with no alarms, metrics, metric filters or dashboards, together with the measured unit prices and the alert-fatigue reasoning; the rejection of a staleness alarm and of a scheduled liveness backup, and the adoption of the Coverage_Check in their place; the deployment model choice and the absence of an alias; the deferral of a customer-managed key; the deferral of replication and immutability; the deferral of the webhook trigger migration; the retention of the current licence despite the review's finding; and the exclusion of restore capability from this specification.
+3. THE repository SHALL contain a decision record under `docs/` capturing: the supersession in Requirement 0; the Contentful quota constraint and the consequent prohibition on scheduled, periodic or synthetic backups; the decision to notify by event-driven email with no alarms, metrics, metric filters or dashboards, together with the measured unit prices and the alert-fatigue reasoning; the rejection of a staleness alarm and of a scheduled liveness backup, and the adoption of the Coverage_Check in their place; the exclusion of access recording under Requirement 38 and what it forfeits; the retention of `maxAllowedLimit` at its current value pending measurement, and why raising it speculatively risks a thrown export; the deployment model choice and the absence of an alias; the deferral of a customer-managed key; the deferral of replication and immutability; the deferral of the webhook trigger migration; the retention of the current licence despite the review's finding; and the exclusion of restore capability from this specification.
 4. EACH deferral SHALL record what was deferred, why, and what activating it would require, including its cost in currency and in Contentful quota.
 5. THE decision record SHALL state plainly what the system cannot detect, so that the accepted risk is inherited knowingly.
 6. THE repository SHALL contain an editor configuration file.
@@ -983,7 +987,7 @@ The Prior_Spec's Requirement 0 froze the system as strictly non-functional. Seve
 2. ALL tests SHALL use the Node built-in test runner with the existing property testing library, under `tests/<area>/`.
 3. ALL AWS command examples SHALL name an explicit region and a profile, per the project's command standards.
 4. NO change SHALL introduce a recurring monthly AWS charge that is not stated, justified and quantified in the design against prices retrieved from the AWS Price List API.
-5. THE design SHALL present a per-item cost table for everything this specification adds, and the total recurring addition SHALL be zero at rest excluding log ingestion, log storage, S3 storage for archives, S3 storage for the access records required by Requirement 38, and published-version code storage bounded by criterion 31.7. THE table SHALL name any free-tier allowance the zero-at-rest claim depends on.
+5. THE design SHALL present a per-item cost table for everything this specification adds, and the total recurring addition SHALL be zero at rest excluding log ingestion, log storage, S3 storage for archives, and published-version code storage bounded by criterion 31.7. THE table SHALL name any free-tier allowance the zero-at-rest claim depends on, and SHALL account for the S3 request traffic the Coverage_Check generates on every build.
 6. NO change SHALL increase the number of Contentful API requests made per content change, and the design SHALL present a per-change request budget showing this.
 7. NO component SHALL call Contentful other than the Backup_Lambda performing an export in response to a real content change.
 8. THE work SHALL proceed on a feature branch, one commit per completed task, and SHALL NOT be committed to a protected branch.

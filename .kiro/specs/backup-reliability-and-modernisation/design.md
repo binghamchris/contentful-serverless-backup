@@ -308,7 +308,7 @@ The rejected alternatives, recorded so they are not revisited:
 | Standard parameter storage | — | **$0** |
 | SNS publish | only when notifying; within the free email allowance | — |
 
-The S3 listing is the only item with a unit price, charged in the LIST request tier. Criterion 57.4 requires the figure to come from the Price List API rather than from this document, so pass 4 retrieves it and puts it in the cost table. At one request per build of either site, it is immaterial but not zero, and criterion 38.5 requires it accounted for.
+The S3 listing is the only item with a unit price, charged in the LIST request tier. Criterion 57.4 requires the figure to come from the Price List API rather than from this document, so pass 4 retrieves it and puts it in the cost table. At one request per build of either site, it is immaterial but not zero, and criterion 57.5 requires it accounted for in the cost table.
 
 ## Test surface
 
@@ -498,7 +498,7 @@ Resources, grouped by what changes:
 | `SQSQueue` — retention, encryption, name | `TerminalQueue` | |
 | `DeadLetterQueue` — encryption, redrive, name, ESM to Notifier | `SuppressionParameter` | |
 | `BackupBucket` — lifecycle, policy, ownership, logging, update-replace | `BackupLogGroup`, `FilterLogGroup`, `NotifierLogGroup` | |
-| `BackupLambdaRole`, `FilterLambdaRole` — names removed, grants reconciled | `AccessLogBucket` | |
+| `BackupLambdaRole`, `FilterLambdaRole` — names removed, grants reconciled | | |
 
 New parameters: `AlertEmail`, `SubscribeAlertEmail`, `TargetBranch`, `CoverageGracePeriodMinutes`, `ClockSkewToleranceSeconds`, `ReNotifyIntervalHours`, `LogRetentionDays`, `BackupRetentionDays`, `NoncurrentVersionRetentionDays`, `EventSourceMappingEnabled`, `EnableReplication`, `EnableObjectLock`, plus the replication destination and Object Lock retention values — every one of which carries a default, so neither disabled feature can become a deployment prerequisite. Every one carries a constraint per Requirement 42 — the ARNs and the URL get patterns, the numeric ones get bounds, and `LogRetentionDays` gets `AllowedValues` drawn from the set CloudWatch Logs accepts, because the service rejects arbitrary integers.
 
@@ -632,7 +632,6 @@ Prices retrieved from the AWS Price List API, `eu-central-1`, 2026-09-19. Volume
 | CloudWatch Logs storage | $0.0324 / GB-month | bounded by `LogRetentionDays` | **usage-dependent** |
 | S3 archive storage, Standard | $0.0245 / GB-month | first 60 days | **usage-dependent** |
 | S3 archive storage, Glacier Flexible | $0.00405 / GB-month | days 60 → retention | **usage-dependent** |
-| S3 access-log storage | $0.0245 / GB-month | bounded retention | **< $0.01** |
 | Lambda published-version code storage | within account allowance, pruned | 3 functions × retained count | **$0.00** |
 | **Total new recurring, at rest** | | | **$0.00** |
 
