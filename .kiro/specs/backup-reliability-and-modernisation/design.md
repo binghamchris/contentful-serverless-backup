@@ -315,3 +315,160 @@ The S3 listing is the only item with a unit price, charged in the LIST request t
 Requirement 47's twelve criteria map onto the boundaries above. The comparison is extracted as a **pure function** of `(contentTs, archiveOutcome, now, grace, skew, suppressionState)`, which makes every one of them a unit test with no AWS involved — and makes the property test in criterion 49.5 able to explore the full timestamp ordering, including equality and skew, without a fixture.
 
 The cases that must fail before they pass: a quiet space with a very old archive and no content change must stay silent *however long* the period is; an empty bucket with a real change must notify once the grace has elapsed; a failed listing must stay silent; and an invocation that enqueues must not also notify.
+
+---
+
+# Pass 3 — The Backup Pipeline
+
+> **Status: pass 3 of 4.** Specifies the `Backup_Lambda` end to end: the phase model, the working-directory lifecycle, the export configuration, asset reconciliation, the streamed upload, and the manifest. Satisfies Requirements 1, 12–17.
+
+## The phase model
+
+Every failure carries the phase that produced it. This is what turns "the backup failed" into an email an operator can act on without opening a console, and it is what lets criterion 17.6 distinguish a quota problem — whose remedy is *wait* — from every other failure, whose remedy is *investigate*.
+
+| Phase | Fails when | Quota spent |
+|---|---|---|
+| `parameters` | SSM read fails, or KMS denies decryption | none |
+| `tokens` | Either token is absent or empty after parsing | none |
+| `export` | Contentful is unavailable, unauthorised, or rate-limits | **yes** |
+| `assets` | Expected asset files are missing or truncated | yes, already spent |
+| `archive` | Archive creation fails, or `/tmp` is exhausted | yes, already spent |
+| `upload` | S3 rejects the upload after in-invocation retries | yes, already spent |
+| `verify` | The stored object is absent or the wrong size | yes, already spent |
+
+The ordering is not incidental: the two phases that cost nothing come **first**. A missing token used to surface as an opaque Contentful authentication error after the export had already begun consuming quota; validating both tokens before the export means a misconfiguration costs nothing. That is what criterion 14.4 means by describing itself as load-bearing rather than defensive.
+
+Errors are thrown, never returned. A thrown error is what makes the invocation fail, which is what makes the message return to the queue, which is what makes the dead-letter path and therefore the notification reachable at all. The `sendResponse` helper survives only on the success return, if at all — the prior specification's requirement to return it was the change that entrenched the silent-success defect, and criterion 0.2 reverses it by name.
+
+## Working-directory lifecycle
+
+```
+/tmp/backup/<invocation-id>/     ← export writes here; archived
+/tmp/out/<archive-name>.zip      ← archive written here; OUTSIDE the archived tree
+```
+
+Three rules, each closing a distinct defect:
+
+**A per-invocation subdirectory.** The old code exported into a fixed `/tmp/backup` and archived the whole directory. On a warm execution environment that made every archive a cumulative superset of every earlier export on that container — several content files with nothing to say which was authoritative, assets since deleted from Contentful still present, and prior error logs included. A unique path per invocation makes each archive contain exactly one export.
+
+**A sweep on entry, not only a cleanup on exit.** Removing the working directory in a `finally` block handles a thrown error. It does **not** handle a timeout or an out-of-memory kill, because Lambda terminates the execution environment without unwinding — and those are precisely the two classes the `Notifier_Lambda` exists to report. Without a sweep, each such failure leaks a full export tree, and because the directory name is unique those trees accumulate rather than overwrite, until ephemeral storage fills and every subsequent invocation on that container fails for a reason no criterion anticipated. So: on entry, remove anything already under `/tmp/backup`; then create this invocation's directory.
+
+**The archive is written outside the tree it archives.** Within a single invocation the ordering happens to be safe — the archiver enumerates before the output file exists — but across invocations it is not: a process killed between writing the archive and unlinking it leaves a `.zip` that the next invocation's enumeration picks up, nesting an entire previous archive inside the new one. Writing to a sibling directory removes the possibility rather than relying on ordering.
+
+## Export configuration
+
+Four changes, three of which reduce Contentful consumption.
+
+**`includeDrafts` removed.** This is what activates the delivery token. The library constructs a Content Delivery API client only when a delivery token is present *and* drafts are excluded; with drafts included, the token is fetched from SSM, decrypted, passed in, and silently ignored. With it removed, entries and assets come from the CDA while content types, editor interfaces, locales, tags and webhooks continue to come from the CMA. Both tokens are genuinely required, and criterion 14.4's fail-fast becomes load-bearing because the library validates only the management token — a missing delivery token would otherwise fall back to a draft-inclusive CMA export without complaint.
+
+This also shifts the heaviest part of the load onto an endpoint with a **separate rate-limit allowance**, which is a direct win for the constraint that editorial work and two frontend builds compete for the same CMA quota.
+
+**`maxAllowedLimit` raised from 200 to 1000.** The library's default and the API ceiling are both 1000. At 200 the export pages through five times as many requests as necessary. One line, and the largest single reduction in Contentful consumption available anywhere in this specification.
+
+**`useVerboseRenderer` set true.** Counter-intuitively, `false` selects a renderer that redraws the whole task list in place with carriage returns on every tick — and under JSON log formatting each redraw becomes its own log envelope. The verbose renderer emits one line per event. Criterion 5.10 requires the resulting volume reduction measured rather than assumed.
+
+**Tokens validated before the export.** Per the phase table above.
+
+## Asset reconciliation
+
+The defect this replaces is the quietest one in the system: the library classifies a failed asset download as a **warning**, and filters warnings out of the condition it throws on. So an archive missing every binary asset resolves normally, prints "The export was successful", and is uploaded and recorded as a good backup. The failure surfaces only at restore.
+
+The obvious fix does not work. The library counts successes, warnings and errors — and then discards them: the counts are set on its internal task context while the promise resolves with the content data alone, so they reach a console table and nowhere else. An earlier draft of the requirements said to "inspect the outcome of the export's asset download stage rather than discarding the export result", which was impossible: the result never contained it. Attaching a listener to the library's internal log emitter would work and is rejected — it is undocumented internal API, and a backup system's correctness should not rest on one.
+
+**Derive completeness from the filesystem instead.** The returned content data *does* list every asset with its URL, and the library writes each to a path derived from that URL. So the expected file set is computable, and one directory walk answers everything:
+
+```js
+// Expected: every asset URL the export returned, resolved to its on-disk path.
+const expected = new Map();
+for (const asset of result.assets ?? []) {
+  for (const file of Object.values(asset.fields?.file ?? {})) {
+    if (!file?.url) continue;
+    const u = new URL(file.url.startsWith('//') ? `https:${file.url}` : file.url);
+    expected.set(
+      path.join(exportDir, u.host, decodeURIComponent(u.pathname)),
+      { id: asset.sys?.id, url: file.url }
+    );
+  }
+}
+
+// One walk answers three questions.
+const missing = [], truncated = [];
+for (const [p, meta] of expected) {
+  const st = await stat(p).catch(() => null);
+  if (!st)            missing.push(meta);
+  else if (st.size === 0) truncated.push(meta);
+}
+```
+
+That single pass satisfies three separate criteria — the shortfall count (15.3), the manifest's asset counts (13.2), and the zero-byte check (13.7) — and depends on nothing but the documented return shape.
+
+**What to do with a shortfall is not uniform**, and this is where an earlier draft contradicted itself: one criterion mandated an unconditional throw while another asked whether a rate-limited shortfall was worth retrying. Throwing costs a full re-export per redelivery, so the answer matters.
+
+| Cause | Action | Why |
+|---|---|---|
+| Rate limiting | **Notify, do not throw.** Record the archive as incomplete in the manifest. | The library already retried each asset three times with exponential backoff. An asset that still failed has exhausted that budget, so a fourth attempt from a whole fresh export is the most expensive option and the least likely to succeed. |
+| Anything else | **Throw.** | Redelivery is a genuine retry with a real chance of succeeding. |
+
+The rate-limit case is the one where criterion 17.6 earns its place: the email says *quota*, so the operator waits rather than investigates.
+
+## The streamed upload
+
+```
+archiver → stream → @aws-sdk/lib-storage Upload (multipart) → S3
+```
+
+The old path read the finished archive into a Buffer with `readFileSync`, then copied it again via `Buffer.from`, and held the entire export result alive in scope throughout — three full-size things resident at once against a 450 MB ceiling, with the failure mode an OOM kill, which is invisible without the Notifier. Streaming makes peak memory independent of archive size.
+
+**One tension to resolve explicitly.** Criterion 16.3 requires the export result not held longer than needed, but asset reconciliation needs `result.assets`. The resolution: reconciliation runs first and extracts only what it needs — the expected-path map, and the counts for the manifest — and the reference to `result` is dropped before archiving begins. So the large object is alive for the reconciliation walk and not for the archive build or the upload.
+
+**Retry inside the invocation before throwing.** A transient upload failure should not cost another Contentful export. The archive already exists locally, so the function retries the upload a bounded number of times within its remaining time, and only then throws. Each retry must **re-create the read stream** — a streaming uploader consumes it, so a reused stream uploads zero bytes silently.
+
+**Delete the local archive only after the upload is confirmed.** The old code unlinked before uploading, so a failed upload left nothing to retry from and recovery meant re-exporting the entire space.
+
+**Verify with a listing, not a head request.** `HeadObject` is the natural way to confirm an object's existence and size, and it requires `s3:GetObject` — which criterion 40.9 forbids, because no code path reads object contents and the exception therefore does not apply. `ListObjectsV2` scoped to the exact key returns `Key` and `Size` and needs only `s3:ListBucket`, which the function already holds for nothing else. It has a second virtue: an incomplete multipart upload does not appear in a general-purpose bucket listing, so a half-uploaded archive is correctly detected as absent rather than reported as present at the wrong size.
+
+**On the checksum.** A multipart upload's stored checksum is a composite of part digests, not a digest of the whole object, so it cannot be compared against a locally computed whole-file hash. The manifest must not claim otherwise. Verification is therefore existence and size, and the checksum's role is transport integrity per part, which is what the SDK uses it for.
+
+## The manifest
+
+Written into the root of the export directory immediately before archiving, so it lands at the archive root.
+
+```json
+{
+  "manifestVersion": 1,
+  "space": "<space id>",
+  "environment": "master",
+  "exportScope": "published-only",
+  "exportStartedAt": "2026-09-19T14:06:01.123Z",
+  "contentFile": "content.json",
+  "counts": {
+    "entries": 1284, "assets": 412, "contentTypes": 23,
+    "locales": 2, "tags": 11, "editorInterfaces": 23, "webhooks": 4
+  },
+  "assetDownloads": { "expected": 412, "present": 412, "missing": 0, "truncated": 0 },
+  "complete": true,
+  "contentfulExportVersion": "8.5.0",
+  "commit": "<git sha of the deployed code>"
+}
+```
+
+`exportScope` and `complete` are the two fields that do work a restorer cannot get elsewhere: the first records that unpublished editorial work is absent by design rather than by accident, and the second is how an archive accepted under the rate-limit rule above announces that it is partial. `contentFile` is a fixed name, so there is never ambiguity about which file is authoritative — the defect that made the old cumulative archives unusable.
+
+`commit` is why criterion 31.2 records the deployed commit on the function as a tag: the function needs to be able to read its own provenance at runtime, and an environment variable would have been reverted as CloudFormation drift.
+
+## Envelope and sizing
+
+`MemorySize` is currently 450 with no justification recorded anywhere in the repository, and `EphemeralStorageSize` is unset, so `/tmp` is the 512 MB default while the function writes an entire export plus its archive there.
+
+Both become explicit, and the basis for the numbers is the **one-time commissioning export** authorised by criterion 0.7 — the only export in this design not triggered by a content change, counted in the quota budget, and recorded in the decision record. It yields the export tree size, the archive size and the duration, from which the ephemeral storage is set with headroom and the memory is chosen against measured peak rather than guessed.
+
+Streaming is what makes this tractable: with the upload no longer buffering, memory scales with the archiver's window rather than with the archive, so the binding constraint becomes `/tmp` — which is a declared number rather than an inherited default.
+
+## Test surface
+
+The pipeline's two least-testable behaviours become testable through one change each:
+
+- **Working-directory lifecycle** — the working root is injectable, so a test points it at a scratch directory, invokes the handler twice against the same root, and asserts the second archive contains exactly one export. That single test covers the contamination defect and the cross-invocation archive nesting together, and it is impossible while `fs` and the archiver are stubbed as they are today.
+- **Asset reconciliation** — a fixture export tree with a deliberately missing and a deliberately zero-byte asset, against a returned content shape listing both. This is the test that needs the export-return fixture the completeness audit found missing, and it is the one place where a wrong assumption about the library's return shape would silently re-create the original false-success defect.
+
+Failure-path assertions use rejection, not a returned status object: `assert.rejects` on upload failure, export failure, parameter failure, token failure and verification failure. Those fail today, which is the point.
