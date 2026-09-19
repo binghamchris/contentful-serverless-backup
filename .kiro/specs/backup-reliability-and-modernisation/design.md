@@ -472,3 +472,190 @@ The pipeline's two least-testable behaviours become testable through one change 
 - **Asset reconciliation** — a fixture export tree with a deliberately missing and a deliberately zero-byte asset, against a returned content shape listing both. This is the test that needs the export-return fixture the completeness audit found missing, and it is the one place where a wrong assumption about the library's return shape would silently re-create the original false-success defect.
 
 Failure-path assertions use rejection, not a returned status object: `assert.rejects` on upload failure, export failure, parameter failure, token failure and verification failure. Those fail today, which is the point.
+
+---
+
+# Pass 4 — Infrastructure, Deployment, Cost and Quota
+
+> **Status: pass 4 of 4.** Template structure, the log-group migration, the conditional blocks that must be inert, IAM per role, the deployment path, and the two tables Requirements 57.5 and 57.6 demand. All prices below were retrieved from the AWS Price List API for `eu-central-1` on 2026-09-19 and are quoted with their effective dates, per criterion 57.4.
+
+## Template structure
+
+Resources, grouped by what changes:
+
+| Existing, reconfigured | New | Unchanged in kind |
+|---|---|---|
+| `BackupLambdaFunc` — runtime, memory, storage, concurrency, logging | `NotifierLambdaFunc` + role + log group | `FilterSNSTrigger` |
+| `FilterLambdaFunc` — memory, timeout, concurrency, logging, invoke config | `AlertTopic` + subscription | `SNSSubscription` |
+| `SQSQueue` — retention, encryption, name | `TerminalQueue` | |
+| `DeadLetterQueue` — encryption, redrive, name, ESM to Notifier | `SuppressionParameter` | |
+| `BackupBucket` — lifecycle, policy, ownership, logging, update-replace | `BackupLogGroup`, `FilterLogGroup`, `NotifierLogGroup` | |
+| `BackupLambdaRole`, `FilterLambdaRole` — names removed, grants reconciled | `AccessLogBucket` | |
+
+New parameters: `AlertEmail`, `SubscribeAlertEmail`, `TargetBranch`, `CoverageGracePeriodMinutes`, `ClockSkewToleranceSeconds`, `ReNotifyIntervalHours`, `LogRetentionDays`, `BackupRetentionDays`, `NoncurrentVersionRetentionDays`, `EventSourceMappingEnabled`, `EnableReplication`, `EnableObjectLock`, plus the replication destination and Object Lock retention values. Every one carries a constraint per Requirement 42 — the ARNs and the URL get patterns, the numeric ones get bounds, and `LogRetentionDays` gets `AllowedValues` drawn from the set CloudWatch Logs accepts, because the service rejects arbitrary integers.
+
+Outputs: bucket name, both queue URLs, all three function names, the alert topic ARN. The function names matter beyond convenience — the build script reads them from the stack rather than from a duplicated `.env` value, which removes the drift where a renamed function leaves the script updating something that no longer exists.
+
+## The log-group migration
+
+This is the one piece of the design that cannot be made fully automatic, and the requirement says so rather than pretending otherwise.
+
+The existing log groups were created implicitly by Lambda, outside the stack, with never-expire retention. Three ways to bring them under management, two of which fail:
+
+- **Declare them at the default `/aws/lambda/<function>` name.** Fails on the next stack update with `ResourceAlreadyExistsException`. `DependsOn` does not help — it orders creation, it does not adopt.
+- **CloudFormation resource import.** Works, but is a separate change-set operation that cannot be combined with other template changes, and the imported groups would be **permanently stuck in the Standard log class**, because a log group's class is immutable after creation.
+- **Point the functions at new, stack-created groups** via `LoggingConfig.LogGroup` with a stack-scoped name. The collision never arises, and the new groups can be created directly in the Infrequent Access class.
+
+The third is chosen. Criterion 5.4 already mandates `LoggingConfig`, so this costs nothing extra:
+
+```yaml
+BackupLogGroup:
+  Type: AWS::Logs::LogGroup
+  DeletionPolicy: Retain
+  Properties:
+    LogGroupName: !Sub '/aws/lambda/${AWS::StackName}/backup'
+    LogGroupClass: INFREQUENT_ACCESS
+    RetentionInDays: !Ref LogRetentionDays
+
+BackupLambdaFunc:
+  Type: AWS::Lambda::Function
+  DependsOn: BackupLogGroup
+  Properties:
+    LoggingConfig:
+      LogFormat: JSON
+      ApplicationLogLevel: INFO
+      LogGroup: !Ref BackupLogGroup
+```
+
+**The residual manual step, stated plainly:** the old `/aws/lambda/contentful-backup` and `/aws/lambda/amplify-notification-filter` groups are now orphaned. They hold no retention setting and will accrue storage charges indefinitely. Deleting them is outside CloudFormation by construction — a stack cannot delete a resource it does not own — so it is a one-time operation in the deployment procedure. Criterion 5.7 requires this admitted rather than glossed.
+
+**Log class consequences, accepted deliberately.** Infrequent Access halves ingestion cost, and its restrictions are mostly things this design already forbids: no metric filters and no Embedded Metric Format, which makes criteria 11.3 and 11.5 self-enforcing. The one real cost is that `GetLogEvents` and `FilterLogEvents` do not work, so an operator cannot open a log stream directly — which is why criterion 7.11 requires the notification to carry a Logs Insights query rather than a bare stream name. Storage and query prices are identical between classes, so only ingestion differs.
+
+## Conditional blocks that must be inert
+
+Requirement 36 parameterises replication and Object Lock as opt-ins, and criterion 36.4 requires that with both disabled the template is a strict no-op against the currently deployed stack — no resource replaced, no property modified merely because the block exists.
+
+The mechanism is `!If` resolving to `AWS::NoValue`, which removes the property from the request entirely rather than setting it to a falsy value:
+
+```yaml
+BackupBucket:
+  Type: AWS::S3::Bucket
+  DeletionPolicy: Retain
+  UpdateReplacePolicy: Retain          # governs replacement; default is Delete
+  Properties:
+    ObjectLockEnabled: !If [ObjectLockOn, true, !Ref 'AWS::NoValue']
+    ObjectLockConfiguration: !If [ObjectLockOn, {...}, !Ref 'AWS::NoValue']
+    ReplicationConfiguration: !If [ReplicationOn, {...}, !Ref 'AWS::NoValue']
+```
+
+With the conditions false the rendered template is equivalent to today's, so there is no diff and no update action.
+
+**My earlier premise about Object Lock was wrong and the requirement now records the right constraints.** Both `ObjectLockEnabled` and `ObjectLockConfiguration` are documented as *Update requires: No interruption*, and enabling Object Lock on an existing bucket is supported — the old "contact AWS Support" restriction no longer applies. So the literal `BucketName` is not an obstacle and criterion 36.4 is achievable as written. The two constraints that do apply:
+
+1. **Irreversibility.** Once enabled, Object Lock cannot be disabled and versioning cannot be suspended. A parameter that switches on but never off is not a symmetric toggle, and its description says so.
+2. **A live conflict with Requirement 34.** An Object Lock default retention blocks deletion of a version until its retain-until date — including the noncurrent-version expiry that stops unbounded storage growth. Enabling Object Lock with a retention longer than the noncurrent-version period makes that expiry silently ineffective and storage resumes growing. So the Object Lock retention is constrained against the lifecycle retention, and criterion 36.9 requires a test asserting it.
+
+`UpdateReplacePolicy: Retain` is the one-line fix worth calling out separately: `DeletionPolicy` governs only stack *deletion*, replacement is governed by `UpdateReplacePolicy`, and its default is `Delete`. Without it, a `BucketName` change would instruct CloudFormation to delete the bucket holding every archive. It would probably fail, because a non-empty versioned bucket resists deletion — but that is an accident of S3 semantics, not a control.
+
+## IAM, per role
+
+Three roles, no fixed names, every grant traceable to a code path or documented as deliberately retained.
+
+**Backup function.** The three SQS actions on the source queue — `ReceiveMessage`, `DeleteMessage`, `GetQueueAttributes` — **retained**, because an SQS event source mapping polls using the function's execution role. These are the body of the AWS-managed `AWSLambdaSQSQueueExecutionRole`, and removing them detaches the trigger rather than tightening anything. Criterion 40.11 records them as deliberately retained, since they answer to the service rather than to the function's own code, and criterion 2.3 requires a test asserting their presence so a future least-privilege sweep cannot delete them again. Then: `s3:PutObject` and `s3:AbortMultipartUpload` for the streamed multipart upload; `s3:ListBucket` for the verification; `ssm:GetParameters` on both token parameters; `sns:Publish` on the alert topic with the KMS actions; and its own log group.
+
+**Filter function.** `sqs:SendMessage` on the source queue; `s3:ListBucket` on the bucket — and deliberately **not** `s3:ListBucketVersions`, so noncurrent versions and delete markers stay invisible to the Coverage_Check; `lambda:InvokeFunction` on the Notifier for the async destination; `ssm:GetParameter` and `ssm:PutParameter` on the one suppression parameter; `sns:Publish` with KMS; its own log group.
+
+**Notifier function.** Its queue-consumption actions on the dead-letter queue; `sns:Publish` with KMS; its own log group.
+
+No role holds `s3:GetObject` or `s3:GetObjectVersion` on the backup bucket, because no code path reads object contents — both the Coverage_Check and the upload verification need listing only. Criterion 50.8 tests this across *all* roles rather than one, since the verification path made the backup function the likelier place such a grant would appear.
+
+The SSM decrypt grant is `!If`-gated on whether a customer-managed key is in use. No explicit grant is needed for the default `aws/ssm` key — the key policy confers it via a `kms:ViaService` condition — so an unconditional wildcard grant would be a genuine over-grant. But re-creating those parameters under a customer-managed key is a common hardening step that would break retrieval, and under the old code that failure was swallowed. Requirements 1 and 7 are what make it visible now.
+
+## Deployment
+
+The model stays local, per your decision: the build script packages and calls `UpdateFunctionCode`. What changes is that it becomes reproducible and gated.
+
+```
+1. Refuse if the working tree is dirty.          → artefact always maps to a commit
+2. npm ci --omit=dev --os=linux --cpu=arm64      → lockfile-faithful, target-platform
+3. Package from an explicit ALLOW-LIST           → index.js, package.json, node_modules
+4. Refuse if any .env or credential file matched → ignore rules protect git, not the zip
+5. Refuse if node_modules is absent
+6. UpdateFunctionCode(..., Publish: true)        → immutable version, one call
+7. TagResource: commit=<sha>                     → survives; an env var would be reverted
+8. Report the published version number
+```
+
+Four details that are load-bearing rather than stylistic:
+
+**An allow-list, not a directory sweep.** `.gitignore` covers `.env` at any depth, which protects version control and does nothing for the zip. A developer's `backup-lambda/.env` left from local testing would be swept into the deployment package alongside a management token granting full write access to the Contentful space. An allow-list makes that impossible rather than unlikely.
+
+**A tag, not an environment variable, for the commit.** The functions' `Environment.Variables` are CloudFormation-managed, so a script write registers as stack drift and is reverted on the next update — silently, and in a way indistinguishable from the placeholder reversion the verification exists to catch. Function tags are not stack-managed for these resources.
+
+**`Publish: true` on the same call.** No separate publish call is needed. Criterion 31.7 bounds accumulation: published versions hold code storage permanently and are chargeable beyond the account allowance, so older versions are pruned to a documented count.
+
+**No alias.** Rollback is "retrieve a prior version's artefact and reapply it". CloudFormation cannot manage an alias pointing at `$LATEST`, so an alias would have to be script-updated — reintroducing exactly the drift this design removes. Criterion 31.6 records the reasoning.
+
+**The placeholder now throws.** A first deployment is therefore performed with `EventSourceMappingEnabled: false`, and the mapping is enabled after code is applied. If a later stack operation ever reinstates the placeholder — changing a function-name parameter forces replacement, which recreates from the template — the throw makes it loud instead of silent. That single character change converts the worst failure mode in the old system into the most visible one.
+
+## Cost table
+
+Prices retrieved from the AWS Price List API, `eu-central-1`, 2026-09-19. Volumes assume content changing every few weeks, so roughly 8–25 backups per year, and builds of two consuming frontends.
+
+| Item | Unit price | Volume | Monthly |
+|---|---|---|---|
+| Lambda compute, arm64 | $0.0000133334 / GB-s | 3 functions, tens of invocations | **< $0.01** |
+| Lambda requests, arm64 | $0.0000002 / request | hundreds | **< $0.01** |
+| Lambda ephemeral storage, arm64 | $0.0000000367 / GB-s | above the free 512 MB, only while running | **< $0.01** |
+| S3 LIST (`ListObjectsV2`) | $0.0054 / 1,000 | 1 per build + 1 per backup verification | **< $0.01** |
+| S3 PUT (archive upload) | $0.0054 / 1,000 | 1 per backup, plus multipart parts | **< $0.01** |
+| SQS FIFO requests | $0.50 / million | ESM polling — see below | **$0.00** *(free tier)* |
+| SSM standard parameter | no charge | 1 parameter | **$0.00** |
+| SNS email notifications | first 1,000/month free | only on failure | **$0.00** |
+| CloudWatch Logs ingestion, IA class | $0.315 / GB | reduced by the renderer change | **usage-dependent** |
+| CloudWatch Logs storage | $0.0324 / GB-month | bounded by `LogRetentionDays` | **usage-dependent** |
+| S3 archive storage, Standard | $0.0245 / GB-month | first 60 days | **usage-dependent** |
+| S3 archive storage, Glacier Flexible | $0.00405 / GB-month | days 60 → retention | **usage-dependent** |
+| S3 access-log storage | $0.0245 / GB-month | bounded retention | **< $0.01** |
+| Lambda published-version code storage | within account allowance, pruned | 3 functions × retained count | **$0.00** |
+| **Total new recurring, at rest** | | | **$0.00** |
+
+**The free-tier dependency criterion 11.10 requires named.** Two event source mappings poll continuously while enabled — the source queue and the dead-letter queue. At long-poll intervals that is on the order of 130,000 `ReceiveMessage` calls per queue per month, so roughly **260,000 FIFO requests/month**, against a perpetual free tier of **1 million requests/month**. It is free, with meaningful headroom, but it is free *because of the allowance* rather than because it is zero — and if the account acquires other SQS usage the combined total is what counts. At $0.50/million the exposure past the allowance is cents, not dollars. The exact poller count is an AWS implementation detail, so this figure is an estimate to be confirmed against the first month's actual bill rather than a guarantee.
+
+**The terminal queue has no consumer**, so it adds no polling. It exists only to receive a message the Notifier cannot process, which is why it costs nothing at rest.
+
+Three items are deliberately usage-dependent rather than zero, and criterion 57.5 excludes them by name: log ingestion, log storage, and archive storage. Archive storage is the one that grows, and Requirement 34 is what makes it bounded — on the current configuration, expiration on a versioned bucket only writes delete markers, so **100% of "expired" archives are retained and billed indefinitely**. Adding noncurrent-version expiry converts an unbounded liability into a bounded one, which is a saving that compounds rather than a cost.
+
+## Contentful request budget
+
+Criterion 57.6 requires a per-content-change budget showing that consumption does not increase on the success path.
+
+| Path | Before | After |
+|---|---|---|
+| Filter — last-update check | 0 *(the static site, not Contentful)* | 0 |
+| Filter — Coverage_Check | — | 0 *(S3 only)* |
+| Backup — content model (CMA) | ~5 calls | ~5 calls |
+| Backup — entries + assets | CMA, paged at **200** | CDA, paged at **1000** |
+| Backup — asset downloads | 1 GET per asset file | unchanged |
+| **Per successful change** | **baseline** | **materially fewer** |
+
+Two reductions, one of them large. Raising `maxAllowedLimit` from 200 to 1000 cuts the paging requests for entries and assets by up to **five times** — for a space with ~1,300 entries that is roughly 7 requests becoming 2. And moving entries and assets from the Management API to the Content Delivery API shifts that load onto a **separate rate-limit allowance**, so it stops competing with editorial work and with the two frontend builds. Neither reduction was claimed in the original review; both fall out of decisions taken for other reasons.
+
+**The one increase, bounded and stated.** Throwing on failure means a failed backup is redelivered, and each redelivery is another export. With `maxReceiveCount` bounded to 2, a failing change costs at most 2 exports rather than 1. Criterion 0.6 permits this explicitly — "shall not increase *on the success path*" — because the alternative is the silent-success behaviour this whole specification exists to remove. The rate-limit case is excluded from even that: a shortfall attributable to rate limiting notifies without throwing, so it does not retry, precisely because retrying when quota is the constraint is the worst available move.
+
+**Plus one, once.** The commissioning export authorised by criterion 0.7, which establishes the size and duration envelope. It is the only export in the design not triggered by a content change, and it is counted here rather than hidden.
+
+## The Filter function's time budget
+
+Criterion 16.9 requires this computed rather than discovered. The filter now performs, in sequence: an HTTP fetch with a bounded timeout, up to two retries with backoff, one S3 listing, one SSM read, and possibly one SNS publish and one SSM write.
+
+The budget is expressed as an invariant rather than a set of magic numbers: **total time spent on Last_Update_API requests including all retries and backoff shall not exceed half the function timeout**, leaving the remaining half for the listing, the parameter read and any publish. The per-request timeout and retry count are then derived from that ceiling and from the function timeout, rather than chosen independently and hoped to fit. The current 30-second timeout is the value to validate against the measured latency of the static endpoint; raising it violates nothing.
+
+## What remains open after this pass
+
+Two items are deliberately unresolved, both gated on a first deployment rather than on further design:
+
+1. **Whether the identity-policy KMS grant suffices for the AWS-managed SNS key.** Pass 1 records the fallbacks in order. The commissioning test publication is the acceptance test.
+2. **The size and duration envelope**, and therefore the final `MemorySize` and `EphemeralStorageSize` values. The commissioning export produces them.
+
+Everything else in Requirements 0–57 now has a mechanism. The next artefact is `tasks.md`, which must respect one sequencing constraint the requirements state and a task list would otherwise violate: the runtime upgrade, the export-library major, the archive-library replacement and the streamed upload are **one atomic change**, because the library requires the newer runtime and separating them leaves the suite failing between commits.

@@ -53,7 +53,7 @@
       "answer": "Coverage_Check in the Filter_Lambda: compare last content change against newest backup object on each build, consuming no Contentful quota"
     }
   ],
-  "blocking": "requirements.md rewritten with scheduled backups removed and the Coverage_Check in their place; awaiting review before design begins.",
+  "blocking": null,
   "context": {
     "template": ".kiro/specs/project-quality-overhaul",
     "working_dir": "/Users/chrisbingham/Documents/GitHub/contentful-serverless-backup",
@@ -86,6 +86,11 @@
       "lambda_arm64_compute": "$0.0000133334 per GB-second",
       "s3_standard": "$0.0245 per GB-month",
       "s3_glacier_flexible": "$0.00405 per GB-month"
-    }
+    },
+    "phase": "design complete; tasks.md is next",
+    "open_items_gated_on_first_deployment": [
+      "Whether the identity-policy KMS grant suffices for the AWS-managed SNS key; fallbacks ranked in design pass 1, acceptance test is the commissioning publication",
+      "The size and duration envelope, and therefore final MemorySize and EphemeralStorageSize; produced by the one-time commissioning export"
+    ]
   }
 }
