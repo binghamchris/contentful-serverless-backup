@@ -1,0 +1,91 @@
+{
+  "decisions": [
+    {
+      "id": "deployment-model",
+      "title": "Lambda code deployment model",
+      "options": [
+        "Move code into the template via S3 artefacts, with GitHub Actions CI and an OIDC deploy role",
+        "Keep the laptop UpdateFunctionCode deploy, but add reproducible packaging and a placeholder-SHA verification gate"
+      ],
+      "recommended": "Move code into the template via S3 artefacts, with GitHub Actions CI and an OIDC deploy role",
+      "answer": "Keep the laptop UpdateFunctionCode deploy, but add reproducible packaging and a placeholder-SHA verification gate"
+    },
+    {
+      "id": "drafts-intent",
+      "title": "Should backups capture unpublished (draft) content?",
+      "options": [
+        "Keep includeDrafts: true and remove the inert deliveryToken, its SSM read and its IAM grant",
+        "Switch to published-state only: drop includeDrafts and keep the delivery token",
+        "Produce two artefacts per run, one draft-inclusive and one published-only"
+      ],
+      "recommended": "Keep includeDrafts: true and remove the inert deliveryToken, its SSM read and its IAM grant",
+      "answer": "Switch to published-state only: drop includeDrafts and keep the delivery token"
+    },
+    {
+      "id": "durability-scope",
+      "title": "How far to take backup-store durability in this spec",
+      "options": [
+        "Full: cross-account and cross-region replication plus S3 Object Lock, accepting a bucket migration",
+        "Same account, second region replication, plus Object Lock only if it can be enabled in place",
+        "Lifecycle and bucket-policy hardening only, with replication and Object Lock parameterised for later"
+      ],
+      "recommended": "Full: cross-account and cross-region replication plus S3 Object Lock, accepting a bucket migration",
+      "answer": "Lifecycle and bucket-policy hardening only, with replication and Object Lock parameterised for later"
+    },
+    {
+      "id": "observability-model",
+      "title": "Monitoring approach, given content changes are weeks to months apart",
+      "options": [
+        "CloudWatch alarms and custom metrics as originally specced (about $5/month)",
+        "No alarms or metrics at all: event-driven email on failure only, plus a monthly scheduled backup as the liveness probe"
+      ],
+      "recommended": "No alarms or metrics at all: event-driven email on failure only, plus a monthly scheduled backup as the liveness probe",
+      "answer": "No alarms or metrics at all: event-driven email on failure only, plus a monthly scheduled backup as the liveness probe"
+    },
+    {
+      "id": "liveness-without-quota",
+      "title": "Liveness detection after scheduled backups were ruled out on Contentful quota grounds",
+      "options": [
+        "No proactive detection at all: rely solely on failures of attempted backups",
+        "Coverage_Check in the Filter_Lambda: compare last content change against newest backup object on each build, consuming no Contentful quota"
+      ],
+      "recommended": "Coverage_Check in the Filter_Lambda: compare last content change against newest backup object on each build, consuming no Contentful quota",
+      "answer": "Coverage_Check in the Filter_Lambda: compare last content change against newest backup object on each build, consuming no Contentful quota"
+    }
+  ],
+  "blocking": "requirements.md rewritten with scheduled backups removed and the Coverage_Check in their place; awaiting review before design begins.",
+  "context": {
+    "template": ".kiro/specs/project-quality-overhaul",
+    "working_dir": "/Users/chrisbingham/Documents/GitHub/contentful-serverless-backup",
+    "excluded_from_scope": [
+      "Phase 0 git/branch protection work (already completed by the user)",
+      "Phase 6 restore runbook, restore drills and DR scope",
+      "Phase 10 licence change (CC BY-NC-SA 4.0 retained)",
+      "CloudWatch alarms, custom metrics, metric filters and dashboards (cost and alert fatigue)"
+    ],
+    "agent_decisions": [
+      "Keep the Amplify SNS trigger as the sole trigger; defer any Contentful-webhook migration",
+      "No scheduled, periodic or synthetic backups at all: Contentful API quota is scarce and shared with editorial work and the PaddelBuch and CloudyPandas frontend builds",
+      "Staleness alarm rejected outright: no threshold can separate a long quiet period from a dead system",
+      "Scheduled liveness backup rejected: it would spend Contentful quota purely to prove the system works",
+      "Coverage_Check adopted instead: the Filter_Lambda compares last content change against the newest backup object on each build, reading the website's static API and S3 only, so it costs no Contentful quota and stays silent during quiet periods by construction",
+      "Failure notification by two event-driven paths: the backup function self-reports caught errors, a DLQ-triggered notifier covers timeouts and out-of-memory kills",
+      "LongTermStorageClass remains a deploy-time parameter; document the Glacier thaw implication rather than choose a class",
+      "adm-zip bumped to a patched version immediately, then replaced by a streaming library when the buffered upload becomes a stream",
+      "No Lambda alias: CloudFormation cannot manage an alias pointing at $LATEST, and a script-updated alias reintroduces drift",
+      "KMS CMK recorded as a deliberate deferral with rationale; SSE-S3 retained",
+      "Test-only CI retained (no deploy, no OIDC, no Contentful calls) since nothing currently runs the suite"
+    ],
+    "measured_prices_eu_central_1": {
+      "cloudwatch_standard_alarm": "$0.10 per alarm-month",
+      "cloudwatch_composite_alarm": "$0.50 per alarm-month",
+      "cloudwatch_custom_metric": "$0.30 per metric-month (first 10,000)",
+      "logs_ingestion_standard_class": "$0.63 per GB",
+      "logs_ingestion_infrequent_access_class": "$0.315 per GB",
+      "logs_storage": "$0.0324 per GB-month",
+      "lambda_arm64_compute": "$0.0000133334 per GB-second",
+      "s3_standard": "$0.0245 per GB-month",
+      "s3_glacier_flexible": "$0.00405 per GB-month"
+    }
+  }
+}
