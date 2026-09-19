@@ -363,7 +363,15 @@ Four changes, three of which reduce Contentful consumption.
 
 This also shifts the heaviest part of the load onto an endpoint with a **separate rate-limit allowance**, which is a direct win for the constraint that editorial work and two frontend builds compete for the same CMA quota.
 
-**`maxAllowedLimit` raised from 200 to 1000.** The library's default and the API ceiling are both 1000. At 200 the export pages through five times as many requests as necessary. One line, and the largest single reduction in Contentful consumption available anywhere in this specification.
+**`maxAllowedLimit` parameterised at its current value, not raised.** This one was nearly a mistake, and the reasoning is worth preserving because the naive reading is attractive and wrong.
+
+The API's maximum for `limit` is 1000, the library defaults to 1000, and neither is plan-dependent — so raising 200 to 1000 looks like a fivefold cut in paged requests for free. It is not free. Contentful enforces a hard **response-size ceiling of 7,340,032 bytes**, and the documented remedy for exceeding it is to *lower* this value; a Contentful maintainer's advice on the relevant issue is to try 100. The ceiling is a function of entry **size**, not count, so a space with large rich-text entries reaches it well below 1000 entries.
+
+`200` is therefore to be read as an empirically-derived working value, not an oversight. And the failure mode if it is raised too far compounds in the wrong direction: a response-size error is a throw, which is redelivered, which costs *another* export — so guessing wrong spends more quota than the smaller pages would have, and loses the backup as well.
+
+So: the value becomes a **parameter defaulting to 200**, bounded at 1000. The function additionally handles a response-size error by **halving the effective page limit and retrying**, down to a floor, so a higher configured value degrades gracefully rather than failing. The commissioning export records the largest limit that actually succeeds for this space, and only then is raising the default a decision with evidence behind it.
+
+This is the same discipline the rest of the design applies to sizing: measure, then set, rather than set and hope.
 
 **`useVerboseRenderer` set true.** Counter-intuitively, `false` selects a renderer that redraws the whole task list in place with carriage returns on every tick — and under JSON log formatting each redraw becomes its own log envelope. The verbose renderer emits one line per event. Criterion 5.10 requires the resulting volume reduction measured rather than assumed.
 
@@ -635,11 +643,15 @@ Criterion 57.6 requires a per-content-change budget showing that consumption doe
 | Filter — last-update check | 0 *(the static site, not Contentful)* | 0 |
 | Filter — Coverage_Check | — | 0 *(S3 only)* |
 | Backup — content model (CMA) | ~5 calls | ~5 calls |
-| Backup — entries + assets | CMA, paged at **200** | CDA, paged at **1000** |
+| Backup — entries + assets | CMA, paged at 200 | **CDA**, paged at 200 *(parameterised, adaptive)* |
 | Backup — asset downloads | 1 GET per asset file | unchanged |
-| **Per successful change** | **baseline** | **materially fewer** |
+| **Per successful change** | **baseline** | **same call count, different endpoint** |
 
-Two reductions, one of them large. Raising `maxAllowedLimit` from 200 to 1000 cuts the paging requests for entries and assets by up to **five times** — for a space with ~1,300 entries that is roughly 7 requests becoming 2. And moving entries and assets from the Management API to the Content Delivery API shifts that load onto a **separate rate-limit allowance**, so it stops competing with editorial work and with the two frontend builds. Neither reduction was claimed in the original review; both fall out of decisions taken for other reasons.
+**One reduction, and it is not the one I first claimed.** Moving entries and assets from the Management API to the Content Delivery API shifts that load onto a **separate rate-limit allowance**, so the heaviest part of the export stops competing with editorial work and with the two frontend builds. That is a real win and it costs nothing.
+
+**The page-count reduction is deferred, deliberately.** An earlier draft raised `maxAllowedLimit` from 200 to 1000 and claimed a fivefold cut in paged requests. The API does permit 1000 and the library defaults to it — but Contentful's hard 7 MiB response-size ceiling is the binding constraint, not the page limit, and the documented remedy for exceeding it is to *lower* this value. Since the ceiling depends on entry size rather than count, 200 is an empirically-derived working value. Raising it speculatively risks a thrown export, which is redelivered, which costs another export — spending more quota than the smaller pages would have, and losing the backup too.
+
+So the value is parameterised at 200 with adaptive halving on a size error, and the commissioning export measures the real headroom. If it turns out 1000 succeeds for this space, the saving is available as a one-parameter change with evidence behind it.
 
 **The one increase, bounded and stated.** Throwing on failure means a failed backup is redelivered, and each redelivery is another export. With `maxReceiveCount` bounded to 2, a failing change costs at most 2 exports rather than 1. Criterion 0.6 permits this explicitly — "shall not increase *on the success path*" — because the alternative is the silent-success behaviour this whole specification exists to remove. The rate-limit case is excluded from even that: a shortfall attributable to rate limiting notifies without throwing, so it does not retry, precisely because retrying when quota is the constraint is the worst available move.
 
