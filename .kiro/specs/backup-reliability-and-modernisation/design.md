@@ -143,3 +143,175 @@ A broken notification path is likewise self-concealing: if the SNS subscription 
 - **Pass 2** must specify the listing algorithm, the key pattern, the three-outcome contract, and the grace and skew arithmetic — including the rule that an invocation closing a gap must not also report it.
 - **Pass 3** must specify how asset completeness is derived from the filesystem rather than from the export's return value, which does not contain it.
 - **Pass 4** must produce the two tables the requirements demand: per-item recurring cost against retrieved prices, and the per-content-change Contentful request budget. It must also resolve the `Filter_Lambda` time budget, which now contains a fetch with retries, an S3 listing and possibly two publishes.
+
+---
+
+# Pass 2 — The Coverage_Check
+
+> **Status: pass 2 of 4.** Specifies the mechanism that detects a silently missing backup without a schedule, an alarm, or a Contentful call. Satisfies Requirement 9, and the suppression halves of Requirements 18 and 20.
+
+## What it is
+
+One comparison, performed inside the `Filter_Lambda` on every invocation: *content changed at time T — does an archive exist whose export began after T?* Both inputs are already available or nearly so. The content timestamp comes from the Last_Update_API, which the filter already fetches. The archive timestamp comes from one S3 listing, which is the only new call.
+
+Neither input touches Contentful. That is the whole reason this mechanism exists rather than a scheduled probe backup.
+
+## Why the key, not `LastModified`
+
+The archive timestamp is parsed from the object **key**, not read from the object's `LastModified` metadata. This is the single most consequential decision in the pass, and getting it backwards would produce a check that silently under-reports.
+
+`generateS3Key` derives the key from `new Date()` at the **start** of the handler, before the export runs. `LastModified` is set when the **upload completes**, which is later by the whole duration of the export, the archive build and the transfer.
+
+Consider a content change at 10:00, and a backup whose export began at 09:59 and finished at 10:02. The archive **does not contain** that change — the export read Contentful before it happened. A `LastModified` comparison reports 10:02 > 10:00 and declares the change covered. A key comparison reports 09:59 < 10:00 and correctly declares a gap.
+
+The key basis has two further virtues that fall out for free: it is unaffected by a storage-class transition, a Glacier restore or a re-upload, any of which can move `LastModified`; and it removes the need to establish whether a lifecycle transition mutates `LastModified` at all, which the feasibility review could not determine from the documentation and declined to guess at.
+
+This makes the key format load-bearing rather than cosmetic, which is why criterion 13.3 now requires it documented alongside the manifest's content-file name.
+
+## The listing algorithm
+
+```js
+// Anchored so nothing but an archive can be mistaken for the newest archive.
+const ARCHIVE_KEY = /^\d{4}\/\d{2}\/\d{2}\/\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}\.\d{3}Z\.zip$/;
+const MAX_PAGES = 5;                      // ~5,000 keys, then declare indeterminate
+
+async function newestArchive(s3, bucket) {
+  let token, pages = 0, newestKey = null;
+  do {
+    const page = await s3.send(new ListObjectsV2Command({
+      Bucket: bucket, MaxKeys: 1000, ContinuationToken: token,
+    }));
+    for (const o of page.Contents ?? []) {
+      if (ARCHIVE_KEY.test(o.Key) && (newestKey === null || o.Key > newestKey)) {
+        newestKey = o.Key;
+      }
+    }
+    token = page.IsTruncated ? page.NextContinuationToken : undefined;
+  } while (token && ++pages < MAX_PAGES);
+
+  if (token)             return { state: 'indeterminate', reason: 'listing exceeded MAX_PAGES' };
+  if (newestKey === null) return { state: 'none' };
+  return { state: 'found', at: timestampFromKey(newestKey), key: newestKey };
+}
+```
+
+Four properties of that, each deliberate:
+
+**A flat listing, no delimiter, no prefix walk.** S3 returns keys in lexicographic order, and the key format is fixed-width and zero-padded throughout, so byte order equals chronological order and the greatest conforming key is the newest archive. The object count makes this cheap and keeps it cheap: one archive per backup, content changing every few weeks to months, and a three-year retention gives roughly 25–75 objects — two orders of magnitude below the 1,000-key page limit. **One request, permanently.**
+
+A greedy prefix descent (max year → max month → max day) would cost four requests to save nothing, and only wins above ~1,000 objects. Worse, the *bounded backward* variant — "list today, then yesterday, back N days" — is actively dangerous here: after a legitimate months-long quiet period it returns nothing, which the three-outcome contract below would have to treat as indeterminate, and a genuinely broken backup path would be reported as "cannot check". That is the worst available outcome, and it is the specific design this section exists to forbid.
+
+**The anchored pattern is not decoration.** "The last key in the bucket" equals "the newest archive" only if nothing else lives there. Anything sorting after a digit — a manifest written at the root, a marker object, a stray prefix — would silently become the newest archive and mask every real gap. The pattern is anchored at both ends and the filter is applied before the comparison.
+
+**Glacier and Deep Archive objects are visible.** `ListObjectsV2` returns `Key`, `Size`, `LastModified` and `StorageClass` for every current object regardless of class, and no restore is needed to read metadata. An archive that has transitioned to cold storage still participates in the comparison, which it must, since most archives will have.
+
+**Versioning works in our favour, and `s3:ListBucketVersions` is deliberately withheld.** `ListObjectsV2` returns current versions only. Noncurrent versions and delete markers require a different API gated by a different permission, which criterion 9.18 does not grant. So when the lifecycle rule places a delete marker over an expired archive, that key leaves the check's view — which is correct, because the archive is gone. Incomplete multipart uploads are likewise absent from a general-purpose bucket listing, so a half-finished upload cannot masquerade as a backup.
+
+## Three outcomes, not two
+
+The earlier draft had a two-way split — determinable or not — and it produced a direct contradiction: an empty bucket has no archive timestamp, so it read as "cannot determine" and stayed silent, while the test requirement demanded that an empty bucket plus a real content change must notify. Both were right about their own case and wrong together.
+
+| Outcome | Meaning | Comparison behaviour |
+|---|---|---|
+| `found` | A conforming key exists | Compare its key timestamp against the content timestamp |
+| `none` | The listing **succeeded** and no conforming key exists | Treat the archive timestamp as negative infinity: a **determinate gap**, subject to the grace period |
+| `indeterminate` | The listing failed, or the page bound was exceeded, or no content timestamp could be derived | Log the reason and **do not notify** |
+
+The distinction that matters is between an empty listing and a failed listing. An empty listing is information — there is no backup — and on a first deployment, or after every archive has expired, it is the correct and actionable answer. A failed listing is an absence of information, and notifying on it would make an inability to check into recurring email, which is the failure mode criterion 9.9 exists to prevent.
+
+## The decision, in order
+
+```
+1. Validate the event envelope.          Zero records → throw (async retries → Notifier → email).
+                                          Malformed record body → fail open, no notification.
+2. Capture the build status.             Anchored regex on the message body.
+3. Derive the branch.                    Leftmost DNS label of the app URL, Amplify-sanitised.
+4. Fetch the Last_Update_API.            Timeout, retries, status check, shape validation.
+                                          → contentTs  |  unusable
+5. List the bucket.                      → found(at) | none | indeterminate
+6. Decide the enqueue.                   See table below.
+7. Decide the coverage notification.     See table below.
+8. Emit one structured log line.         Every input, both decisions, and the reasons.
+```
+
+Steps 4 and 5 run **regardless of the branch and regardless of the status**, because they cost no Contentful quota and because the coverage question is independent of whether this particular build warrants a backup.
+
+### A subtlety that is easy to get wrong later
+
+The Last_Update_API URL is a **fixed template parameter**. It is not derived from the notification. So the filter always reads the same endpoint — production's — no matter which branch's build triggered the invocation.
+
+This is what makes running the Coverage_Check on a non-matching branch meaningful rather than misleading. A feature-branch build publishes its own last-update JSON, and if the URL were derived from the notification the check would be comparing a feature branch's content state against production's archives, producing false gaps. Deriving the URL from the notification looks like a natural improvement and would break the check; the parameter is deliberate.
+
+### Enqueue
+
+| Status captured | Branch matches | Content timestamp | Newest archive | Enqueue? |
+|---|---|---|---|---|
+| success | yes | usable | older than content | **yes** |
+| success | yes | usable | newer than content | no — already covered |
+| success | yes | unusable | newer than `now − grace` | no — fail-open suppressed |
+| success | yes | unusable | older, or none | **yes** — fail open |
+| success | **no** | any | any | no — wrong branch |
+| not success | yes | any | any | no |
+| **not captured** | yes | any | as above | **yes** — fail open |
+
+Two different suppression rules appear there, and the difference is not arbitrary. When a content timestamp is **usable**, suppression compares against it — that is the deduplication guarantee of criterion 20.2, extended past SQS's fixed five-minute window to an indefinite one, at no cost, using a listing already performed. When the content timestamp is **unusable**, there is nothing to compare against, so suppression falls back to recency: was there a backup within the grace window? That is criterion 18.10, and it works because the *previous* fail-open produced an archive that this invocation can see.
+
+### Coverage notification
+
+Notify when **all** hold:
+
+- the outcome is `found` with a key timestamp older than `contentTs − skewTolerance`, **or** the outcome is `none`
+- `now − contentTs > gracePeriod`
+- this invocation is **not** enqueueing a backup for this same content state
+- the suppression store does not already record a notification for this content state within the re-notify interval
+
+Otherwise, silence.
+
+The third condition is the one the earlier draft forbade. A criterion requiring the check to run "independently of the backup-required decision" was read as prohibiting any correlation with it — so a build slower than the grace period would both enqueue a backup and email a gap for the identical change, in the same invocation. That is email during entirely normal operation. The criterion now requires the check to *run* regardless, which was its real intent, while permitting the one correlation that keeps the guarantee true.
+
+Equal timestamps count as covered. The two clocks are independent — one is Contentful's, surfaced through a static build artefact; the other is the backup function's `new Date()` — so a skew tolerance is subtracted from the content timestamp before comparison, and it is a bounded parameter rather than a constant.
+
+## Suppression state
+
+Requirement 9.16 needs state that survives between invocations weeks apart. The earlier draft demanded it while the IAM criteria forbade every store capable of holding it — the defect an audit caught as structural rather than local.
+
+**One SSM Parameter Store standard parameter**, holding a small JSON value:
+
+```json
+{ "lastNotifiedContentChange": "2026-09-19T14:06:01.123Z", "lastNotifiedAt": "2026-09-19T18:12:44.900Z" }
+```
+
+Notify when the content-change timestamp differs from `lastNotifiedContentChange`, or when `lastNotifiedAt` is older than a bounded re-notify interval. Write after a successful publish.
+
+Standard parameters are free, and standard throughput is free, so this is zero at rest. Concurrency is last-write-wins: two frontends building at the same time write near-identical values, so the race is benign and needs no conditional write. It survives a cold start, which rules out ephemeral storage — the filter fires weeks apart, so its environment is always cold and `/tmp` is effectively write-only.
+
+The rejected alternatives, recorded so they are not revisited:
+
+| Option | Why not |
+|---|---|
+| S3 marker object | Needs `s3:PutObject`, which criterion 40.6 forbids, and `s3:GetObject`, which 40.9 forbids; trips the encryption-header policy in criterion 37.2; and the marker key pollutes the very listing the check reads |
+| SQS deduplication | Fixed five-minute window. Useless across builds weeks apart — this is the gap criterion 20.6 records |
+| Ephemeral storage | Lost on a cold start, and this function is always cold |
+| DynamoDB | Correct, and conditional writes give real atomicity — but it adds a resource and a cost line to argue about for guarantees this workload does not need |
+| Object tagging | Needs write access to archives, works against the immutability intent of Requirement 36, and there is no object to tag in the fail-open case |
+| Function tags or environment variables | CloudFormation-managed, so a write registers as drift and is reverted — the same trap criterion 31.2 avoids for the commit identifier |
+
+**On whether re-notification is routine traffic.** It is not. A digest reports on a period; this reports that a specific unresolved condition still holds and action is still required. Criterion 7.14 forbids the former, and criterion 57.13's "no email during normal operation" does not apply because an uncovered content change is not normal operation. The re-notify interval exists so a persistent gap stays visible without arriving on every build.
+
+## Cost
+
+| Item | Per build | At rest |
+|---|---|---|
+| `ListObjectsV2` | 1 request | — |
+| SSM `GetParameter` | 1 request (standard throughput, free) | — |
+| SSM `PutParameter` | only when notifying | — |
+| Standard parameter storage | — | **$0** |
+| SNS publish | only when notifying; within the free email allowance | — |
+
+The S3 listing is the only item with a unit price, charged in the LIST request tier. Criterion 57.4 requires the figure to come from the Price List API rather than from this document, so pass 4 retrieves it and puts it in the cost table. At one request per build of either site, it is immaterial but not zero, and criterion 38.5 requires it accounted for.
+
+## Test surface
+
+Requirement 47's twelve criteria map onto the boundaries above. The comparison is extracted as a **pure function** of `(contentTs, archiveOutcome, now, grace, skew, suppressionState)`, which makes every one of them a unit test with no AWS involved — and makes the property test in criterion 49.5 able to explore the full timestamp ordering, including equality and skew, without a fixture.
+
+The cases that must fail before they pass: a quiet space with a very old archive and no content change must stay silent *however long* the period is; an empty bucket with a real change must notify once the grace has elapsed; a failed listing must stay silent; and an invocation that enqueues must not also notify.
