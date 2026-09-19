@@ -89,7 +89,7 @@ The Prior_Spec's Requirement 0 froze the system as strictly non-functional. Seve
 4. WHERE a test asserts a behaviour this specification reverses, THE test SHALL be rewritten to assert the new behaviour rather than deleted, and the rewrite SHALL reference the criterion that authorised it.
 5. THE end-to-end event flow SHALL retain a single trigger — the Amplify build notification — and SHALL NOT gain a scheduled trigger.
 6. THE number of Contentful export runs per content change SHALL NOT increase on the success path. THE additional exports caused by redelivery of a failed message SHALL be bounded by `maxReceiveCount` and stated in the per-change request budget required by criterion 57.6.
-7. A ONE-TIME commissioning export, authorised by criterion 16.9 and counted in that budget, SHALL be the only export not triggered by a real content change.
+7. A ONE-TIME commissioning export, authorised by criterion 16.12 and counted in that budget, SHALL be the only export not triggered by a real content change.
 
 ---
 
@@ -140,12 +140,12 @@ The Prior_Spec's Requirement 0 froze the system as strictly non-functional. Seve
 
 #### Acceptance Criteria
 
-1. THE Placeholder_Handler in the CloudFormation_Template SHALL throw an error identifying itself as undeployed placeholder code, for every function it is used for.
-2. THE Placeholder_Handler SHALL NOT return a value that Lambda or an Event_Source_Mapping would interpret as success.
+1. THE Placeholder_Handler in the CloudFormation_Template SHALL throw an error identifying itself as undeployed placeholder code, for every function EXCEPT the Notifier_Lambda. THE Notifier_Lambda's placeholder SHALL instead PUBLISH a notification identifying itself as undeployed placeholder code, because the Notifier is the terminus of every failure path and a throwing Notifier would route its own failure to the unobserved Terminal_Queue; it is the one placeholder that SHALL fail open.
+2. THE Placeholder_Handler SHALL NOT return a value that Lambda or an Event_Source_Mapping would interpret as success, EXCEPT that the Notifier_Lambda's placeholder publishes a notification (criterion 4.1) rather than returning or throwing, which is its fail-open behaviour and cannot be interpreted as a successful backup by any mapping.
 3. WHEN a Placeholder_Handler is invoked for the Backup_Lambda, THE resulting failure SHALL reach the owner through Requirement 7.
 4. WHEN a Placeholder_Handler is live for the Filter_Lambda, such that no backup is ever requested, THE condition SHALL be caught by the Filter_Lambda's `OnFailure` destination required by criterion 8.2, because the placeholder throws. IT SHALL NOT be attributed to the Coverage_Check, which runs inside the Filter_Lambda and therefore cannot execute when that function is the placeholder.
-5. THE CloudFormation_Template SHALL expose a parameter controlling whether the Backup_Lambda's Event_Source_Mapping is enabled, defaulting to `true` to preserve current behaviour, so a first deployment can be performed with the mapping disabled.
-6. THE deployment documentation SHALL instruct the operator to deploy with the mapping disabled on a first deployment and to enable it only after code has been applied.
+5. THE CloudFormation_Template SHALL expose a parameter controlling whether the Event_Source_Mappings are enabled, defaulting to `true` to preserve current behaviour, so a first deployment can be performed with BOTH the Backup_Lambda's source-queue mapping AND the Dead_Letter_Queue-to-Notifier mapping disabled — the latter so a first deployment does not run dead-letter traffic against placeholder Notifier code.
+6. THE deployment documentation SHALL instruct the operator to deploy with the mappings disabled on a first deployment and to enable them only after code has been applied.
 
 ### Requirement 5: Log Groups Shall Be Stack-Managed with Bounded Retention
 
@@ -230,7 +230,7 @@ The Prior_Spec's Requirement 0 froze the system as strictly non-functional. Seve
 7. WHEN the outcome is **found** AND the last content change is newer than the key-derived backup timestamp, AND more time has elapsed since that change than a configured grace period, THEN THE Filter_Lambda SHALL publish a coverage-gap notification to the Alert_Topic.
 8. WHEN the outcome is **none** AND a valid content change timestamp exists, THE absent backup SHALL be treated as a backup timestamp of negative infinity — a determinate gap, not an indeterminate result — and SHALL notify subject to the same grace period.
 9. WHEN the outcome is **indeterminate**, THE Filter_Lambda SHALL log the reason and SHALL NOT notify, so an inability to check never becomes routine email traffic.
-10. IF this invocation enqueues a backup for the content state under comparison, THEN NO coverage-gap notification SHALL be published for that state, because the same invocation is closing the gap.
+10. THE coverage-gap notification for a content state SHALL be suppressed ONLY IF an enqueue for that same content state was recorded in the Suppression_Store within the grace period. An enqueue therefore buys silence for one grace period, not indefinitely: a working pipeline closes the gap inside that window, and a pipeline broken between the enqueue and a stored archive is reported at the following build once the grace period has elapsed. NO invocation SHALL suppress the notification merely because it enqueued in the same invocation.
 11. EQUAL timestamps SHALL be treated as covered and SHALL NOT notify. THE comparison SHALL apply a documented clock-skew tolerance, subtracted from the content timestamp, because the two timestamps originate from independent clocks.
 12. THE grace period SHALL be a template parameter with a documented default and a bounded range, long enough to accommodate a build plus a backup in flight, so a backup that is merely in progress does not notify.
 13. WHEN a backup newer than the last content change exists, NO notification SHALL be sent.
@@ -309,8 +309,8 @@ The Prior_Spec's Requirement 0 froze the system as strictly non-functional. Seve
 1. THE Backup_Lambda SHALL write a Backup_Manifest into the root of each archive.
 2. THE Backup_Manifest SHALL record the Contentful space and environment, the UTC export timestamp, the export scope (published-state only, per Requirement 14), per-entity-type counts, asset download success and failure counts, the `contentful-export` version, and the deployed code's commit identifier.
 3. THE Backup_Lambda SHALL write the export's content file under a fixed, documented name inside the archive, so the authoritative entry point is unambiguous. THE S3 object key format SHALL also be documented here, since criterion 9.3 depends on it being fixed-width and lexicographically time-ordered.
-4. THE Backup_Lambda SHALL set a checksum algorithm and a content type on the S3 upload. WHERE the upload is multipart, the design SHALL record that the stored checksum is a composite of part checksums rather than a whole-object digest, and the Backup_Manifest SHALL NOT claim otherwise.
-5. AFTER upload, THE Backup_Lambda SHALL verify the stored object by a `ListObjectsV2` call scoped to that exact key, reading `Key` and `Size` from the listing, and SHALL throw unless the object is present and its size matches the bytes uploaded. THIS call requires only `s3:ListBucket`, so it satisfies criterion 40.8's prohibition on `s3:GetObject`, which `HeadObject` would otherwise require. IT has a second virtue: an incomplete multipart upload does not appear in a general-purpose bucket listing, so a half-uploaded archive is correctly detected as absent.
+4. THE Backup_Lambda SHALL set a checksum algorithm and a content type on the S3 upload. THE Backup_Manifest SHALL NOT claim a stored whole-object digest: although S3 can compute one for a multipart upload, reading it back requires a `GetObject`-family permission this specification withholds on the archive prefix (criterion 40.9), so verification is by existence and size, not by digest comparison.
+5. THE Backup_Lambda SHALL upload to a staging prefix the Coverage_Check ignores, verify the staged object by a `ListObjectsV2` call scoped to that exact key (present, size matches the bytes sent), and only then copy it to the final coverage-visible key. A verification-failed or partial archive therefore never lands under a conforming key and cannot mask a gap, without any role holding a delete permission. THE verification listing requires only `s3:ListBucket`, and the copy requires `s3:GetObject` on the staging prefix ONLY, so criterion 40.9's prohibition on `s3:GetObject` narrows to the archive prefix. An incomplete multipart upload does not appear in a general-purpose bucket listing, so a half-uploaded staged object is correctly detected as absent.
 6. THE Backup_Lambda IAM role SHALL be granted `s3:ListBucket` on the Backup_Bucket for this purpose, and SHALL NOT be granted `s3:GetObject` or `s3:GetObjectVersion`.
 7. THE Backup_Lambda SHALL verify that no zero-byte files exist in the export tree before archiving.
 
@@ -374,7 +374,7 @@ The Prior_Spec's Requirement 0 froze the system as strictly non-functional. Seve
 
 1. THE Backup_Lambda SHALL identify each pipeline phase in its errors and logs: parameter retrieval, token validation, export, archive creation, upload, and verification.
 2. WHEN a phase fails, THE thrown error SHALL carry the phase identifier.
-3. THE phase identifier SHALL appear in the notification required by criterion 7.9.
+3. THE phase identifier SHALL appear in the notification required by criterion 7.11.
 4. THE Backup_Lambda SHALL NOT wrap the entire pipeline in a single undifferentiated handler that loses the failing phase.
 5. THE phase SHALL be recorded as a structured log field and SHALL NOT be promoted to a metric dimension, per Requirement 11.
 6. WHERE a phase failure is attributable to Contentful rate limiting or quota exhaustion, THE notification SHALL say so distinctly, because the remedy differs from every other failure.
@@ -835,7 +835,7 @@ The review recommended recording who reads, lists or deletes a backup. That reco
 4. A test SHALL assert that a long quiet period with no content change produces NO notification, however old the newest backup is.
 5. A test SHALL assert that an empty Backup_Bucket combined with a real content change is treated as the determinate **none** outcome and produces a notification once the grace period has elapsed, per criterion 9.8.
 6. A test SHALL assert that a listing failure or an exceeded page bound is treated as **indeterminate** and produces NO notification, per criterion 9.9. THE distinction between an empty listing and a failed listing SHALL be asserted explicitly, since both once read as "cannot determine".
-7. A test SHALL assert that an invocation which enqueues a backup for the content state under comparison publishes NO coverage-gap notification for that state, per criterion 9.10.
+7. A test SHALL assert that an invocation whose enqueue for the content state was recorded within the grace period publishes NO coverage-gap notification, AND that an invocation for which the recorded enqueue is older than the grace period, with the archive still absent, DOES notify — per criterion 9.10.
 8. A test SHALL assert that equal timestamps produce NO notification, and SHALL cover the clock-skew tolerance at its boundary, per criterion 9.11.
 9. A test SHALL assert that the Coverage_Check does not enqueue a backup.
 10. A test SHALL assert that the Coverage_Check runs for a build whose branch does not match the target, per criterion 21.4.
