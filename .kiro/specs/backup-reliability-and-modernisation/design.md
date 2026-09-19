@@ -500,7 +500,7 @@ Resources, grouped by what changes:
 | `BackupBucket` — lifecycle, policy, ownership, logging, update-replace | `BackupLogGroup`, `FilterLogGroup`, `NotifierLogGroup` | |
 | `BackupLambdaRole`, `FilterLambdaRole` — names removed, grants reconciled | `AccessLogBucket` | |
 
-New parameters: `AlertEmail`, `SubscribeAlertEmail`, `TargetBranch`, `CoverageGracePeriodMinutes`, `ClockSkewToleranceSeconds`, `ReNotifyIntervalHours`, `LogRetentionDays`, `BackupRetentionDays`, `NoncurrentVersionRetentionDays`, `EventSourceMappingEnabled`, `EnableReplication`, `EnableObjectLock`, plus the replication destination and Object Lock retention values. Every one carries a constraint per Requirement 42 — the ARNs and the URL get patterns, the numeric ones get bounds, and `LogRetentionDays` gets `AllowedValues` drawn from the set CloudWatch Logs accepts, because the service rejects arbitrary integers.
+New parameters: `AlertEmail`, `SubscribeAlertEmail`, `TargetBranch`, `CoverageGracePeriodMinutes`, `ClockSkewToleranceSeconds`, `ReNotifyIntervalHours`, `LogRetentionDays`, `BackupRetentionDays`, `NoncurrentVersionRetentionDays`, `EventSourceMappingEnabled`, `EnableReplication`, `EnableObjectLock`, plus the replication destination and Object Lock retention values — every one of which carries a default, so neither disabled feature can become a deployment prerequisite. Every one carries a constraint per Requirement 42 — the ARNs and the URL get patterns, the numeric ones get bounds, and `LogRetentionDays` gets `AllowedValues` drawn from the set CloudWatch Logs accepts, because the service rejects arbitrary integers.
 
 Outputs: bucket name, both queue URLs, all three function names, the alert topic ARN. The function names matter beyond convenience — the build script reads them from the stack rather than from a duplicated `.env` value, which removes the drift where a renamed function leaves the script updating something that no longer exists.
 
@@ -557,6 +557,14 @@ BackupBucket:
 ```
 
 With the conditions false the rendered template is equivalent to today's, so there is no diff and no update action.
+
+**Two details are what make "optional" actually optional**, and both are easy to get wrong in a way that only shows up when someone tries to deploy.
+
+*Every supporting parameter carries a default.* Replication needs a destination bucket and account; Object Lock needs a retention mode and period. Declared the usual way — `Type: String`, no default — CloudFormation would **demand a value for each at deploy time even with the feature switched off**, so a disabled feature would become a deployment prerequisite. Each therefore gets a default (empty string, or a documented placeholder), and criterion 36.11 requires a test asserting that the template's required-parameter set — those without defaults — contains nothing belonging to either feature.
+
+*Every supporting resource is gated too.* Replication needs an IAM role, and a destination bucket policy. Declared unconditionally, those exist whether or not replication is on. Criterion 36.4 therefore forbids **creating** a new resource as well as modifying an existing one, so the role and the policy carry the same condition as the configuration they serve.
+
+Taken together with criterion 36.7 — that neither feature is a prerequisite for any other requirement, and the system produces, verifies and notifies about backups identically with both off — the features are genuinely inert when disabled rather than merely defaulted off.
 
 **My earlier premise about Object Lock was wrong and the requirement now records the right constraints.** Both `ObjectLockEnabled` and `ObjectLockConfiguration` are documented as *Update requires: No interruption*, and enabling Object Lock on an existing bucket is supported — the old "contact AWS Support" restriction no longer applies. So the literal `BucketName` is not an obstacle and criterion 36.4 is achievable as written. The two constraints that do apply:
 

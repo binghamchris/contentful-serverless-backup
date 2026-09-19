@@ -650,15 +650,21 @@ The Prior_Spec's Requirement 0 froze the system as strictly non-functional. Seve
 1. THE CloudFormation_Template SHALL express cross-region and cross-account replication as a condition-gated configuration, disabled by default.
 2. WHEN replication is enabled, THE configuration SHALL NOT propagate delete markers to the destination.
 3. THE CloudFormation_Template SHALL express object immutability as a condition-gated configuration, disabled by default.
-4. WITH both features disabled, THE template SHALL be a no-op against the existing deployed stack, and no existing resource SHALL be replaced or modified as a result of their presence.
-5. WITH both features disabled, THEY SHALL add no recurring cost.
-6. THE design SHALL record the two constraints that actually apply to object immutability, neither of which is resource replacement: both the enabling property and its configuration are updatable in place on an existing bucket with no interruption, so the literal bucket name is no obstacle and criterion 36.4 is achievable.
-7. THE FIRST constraint is irreversibility: once enabled, immutability cannot be disabled and versioning cannot be suspended. A parameter that switches on but never off is not a symmetric toggle, and the parameter description and documentation SHALL say so.
-8. THE SECOND constraint is a direct conflict with Requirement 34: a default retention blocks deletion of a version until its retain-until date, including the noncurrent-version expiry that criterion 34.1 requires to stop unbounded storage growth. THE default retention period SHALL therefore be constrained against the retention parameter in Requirement 34, and the design SHALL state which mode is intended and why — one where an authorised principal can override, or one where nobody can until the date passes.
-9. A test SHALL assert that an enabled immutability retention cannot exceed the lifecycle retention it would otherwise block.
-10. THE documentation SHALL state what each feature protects against and what activating it requires, including its cost.
-11. THE design SHALL record that with both disabled, the backups share a region, an account and a blast radius with the system they protect.
-12. NEITHER feature, when enabled, SHALL consume Contentful quota, since both operate on stored objects.
+4. WITH both features disabled, THE template SHALL be a no-op against the existing deployed stack: no existing resource SHALL be replaced or modified, and NO new resource SHALL be created, as a result of their presence.
+5. EVERY parameter that exists only to support replication or object immutability — the destination bucket, the destination account, the retention mode and period, and any other — SHALL declare a default. A stack SHALL deploy successfully with both features disabled WITHOUT the operator supplying any of them. A parameter of this kind declared without a default would make CloudFormation demand a value for a feature that is switched off, which would make a disabled feature a deployment prerequisite.
+6. EVERY supporting resource these features require, including any replication IAM role and any destination bucket policy, SHALL itself be condition-gated, so that nothing exists when the features are off.
+7. NEITHER feature SHALL be a prerequisite for any other requirement in this specification. NO criterion elsewhere SHALL depend on replication or immutability being enabled, and the system SHALL produce, verify and notify about backups identically with both off.
+8. WITH both features disabled, THEY SHALL add no recurring cost.
+9. A test SHALL assert that both feature parameters default to disabled.
+10. A test SHALL assert that, rendered with default parameters, the template declares neither the replication configuration nor the object-lock properties, and declares none of their supporting resources.
+11. A test SHALL assert that the template's required-parameter set — those without defaults — contains no parameter belonging to either feature.
+12. THE design SHALL record the two constraints that actually apply to object immutability, neither of which is resource replacement: both the enabling property and its configuration are updatable in place on an existing bucket with no interruption, so the literal bucket name is no obstacle and criterion 36.4 is achievable.
+13. THE FIRST constraint is irreversibility: once enabled, immutability cannot be disabled and versioning cannot be suspended. A parameter that switches on but never off is not a symmetric toggle, and the parameter description and documentation SHALL say so.
+14. THE SECOND constraint is a direct conflict with Requirement 34: a default retention blocks deletion of a version until its retain-until date, including the noncurrent-version expiry that criterion 34.1 requires to stop unbounded storage growth. THE default retention period SHALL therefore be constrained against the retention parameter in Requirement 34, and the design SHALL state which mode is intended and why — one where an authorised principal can override, or one where nobody can until the date passes.
+15. A test SHALL assert that an enabled immutability retention cannot exceed the lifecycle retention it would otherwise block.
+16. THE documentation SHALL state what each feature protects against and what activating it requires, including its cost.
+17. THE design SHALL record that with both disabled, the backups share a region, an account and a blast radius with the system they protect.
+18. NEITHER feature, when enabled, SHALL consume Contentful quota, since both operate on stored objects.
 
 ### Requirement 37: Transport and Object Policy Shall Be Enforced
 
