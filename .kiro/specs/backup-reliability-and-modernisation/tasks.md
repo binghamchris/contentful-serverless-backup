@@ -18,7 +18,8 @@ Tasks 1–7 are template and test-harness work that requires **no dependency cha
 - [ ] **1. Shared test harness and template invariants.**
   - Extract the duplicated `require.cache` stubbing preamble into one shared test helper, and the duplicated `CFN_SCHEMA` YAML-parsing block into one shared module both infrastructure test files import.
   - Add a `cfn-lint` (and a policy scan — `cfn-guard` or `checkov`) npm script that runs against `infrastructure/template.yaml`.
-  - _Requirements: 45.6, 44.1, 44.2_
+  - Add template-invariant tests that the template declares no alarm, no composite alarm, no metric filter, no dashboard and no scheduled/time-based trigger, and that no source file publishes a custom metric — enforcing the no-standing-cost, no-quota observability decision structurally so it cannot erode.
+  - _Requirements: 45.6, 44.1, 44.2, 11.1–11.7, 50.3, 50.4_
 
 - [ ] **2. Declare stack-managed log groups and cut the functions over.**
   - Add three `AWS::Logs::LogGroup` resources at stack-scoped names (`/aws/lambda/${AWS::StackName}/{backup,filter,notifier}`), `LogGroupClass: INFREQUENT_ACCESS`, `RetentionInDays` from a bounded `LogRetentionDays` parameter (default 90, `AllowedValues` from CloudWatch's accepted set), `DeletionPolicy: Retain`.
@@ -34,16 +35,17 @@ Tasks 1–7 are template and test-harness work that requires **no dependency cha
   - _Requirements: 3.1–3.6, 39.1–39.7_
   - _Verify: a test asserting `MessageRetentionPeriod ≥ 2 × VisibilityTimeout × MaxReceiveCount`, `VisibilityTimeout ≥ 6 × Backup Timeout`, and a policy on each of the three queues._
 
-- [ ] **4. Make the placeholder fail closed (except the Notifier) and gate the mappings.**
+- [ ] **4. Alert channel, fail-closed placeholder (except the Notifier), and gated mappings.**
+  - Add the `AlertTopic` (standard SNS, SSE with at least the AWS-managed key), a validated `AlertEmail` parameter, and a `SubscribeAlertEmail`-gated email subscription so a validation stack can omit it; publish the topic ARN as an output. Enumerate its permitted publishers.
   - Change both existing functions' inline placeholder to `throw`. Add the `NotifierLambdaFunc` with a placeholder that **publishes** "code never applied" and does not throw.
   - Add an `EventSourceMappingEnabled` parameter (default `true`) gating **both** the source-queue mapping and the new DLQ→Notifier mapping (`BatchSize: 1`).
-  - _Requirements: 4.1–4.6, 7.4, 7.5, 7.6_
-  - _Verify: a template test asserting the DLQ→Notifier mapping exists and both mappings honour the parameter._
+  - _Requirements: 4.1–4.6, 6.1–6.8, 7.4, 7.5, 7.6_
+  - _Verify: a template test asserting the DLQ→Notifier mapping exists, both mappings honour the parameter, and the subscription is condition-gated._
 
 - [ ] **5. Backup_Lambda: throw on every failure path.**
   - Remove `sendResponse` from all failure paths (retain only on success or delete it); `throw`, never return, on any failure. Remove the unreachable `$metadata.httpStatusCode` branches. Log message and stack before propagating; never return the raw error object.
   - Publish to the Alert_Topic before rethrowing **only when `ApproximateReceiveCount == 1`**.
-  - _Requirements: 1.1–1.5, 7.1, 7.2, 7.3, 0.2_
+  - _Requirements: 1.1–1.5, 7.1, 7.2, 7.3, 0.2, 46.1–46.10_
   - _Verify: `assert.rejects` on upload failure, export failure, parameter failure; a test that a publish happens once on first delivery and not on redelivery, and none on success._
 
 - [ ] **6. Backup_Lambda: message lifecycle and event-envelope validation.**
