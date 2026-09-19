@@ -64,6 +64,7 @@ The three constraints above rule out both conventional monitoring answers.
 - **Backup_Bucket**: the S3 bucket holding backup archives.
 - **SQS_Queue**: the FIFO queue decoupling the Filter_Lambda from the Backup_Lambda (`contentfulBackupQueue.fifo`).
 - **Dead_Letter_Queue**: the FIFO queue receiving messages the Backup_Lambda repeatedly fails to process (`contentfulBackupDLQ.fifo`). Under this specification it is also the trigger for failure notification.
+- **Terminal_Queue**: a new FIFO queue receiving messages the Notifier_Lambda itself cannot process. It has no consumer, and exists so that one unprocessable message cannot block every subsequent failure notification in its message group.
 - **Event_Source_Mapping**: an `AWS::Lambda::EventSourceMapping` connecting a queue to a function.
 - **Alert_Topic**: a new SNS topic, owned by this stack, carrying failure and coverage-gap notifications to the owner by email.
 - **Amplify_Topic**: the SNS topic created manually in the Amplify console and passed in as `SnsTopicArn`. Not owned by this stack.
@@ -768,7 +769,7 @@ The Prior_Spec's Requirement 0 froze the system as strictly non-functional. Seve
 
 #### Acceptance Criteria
 
-1. THE CloudFormation_Template SHALL publish outputs for the bucket, both queues, every function name, and the Alert_Topic.
+1. THE CloudFormation_Template SHALL publish outputs for the bucket, every queue, every function name, and the Alert_Topic.
 2. THE Build_Script SHALL take the function names from the stack rather than from a duplicated configuration value, or the design SHALL record why it does not.
 3. THE deployment documentation SHALL instruct the operator to apply stack-level tags, which propagate to taggable resources.
 4. THE documentation SHALL state that the tag keys must also be activated for cost reporting, which is a separate manual step.
