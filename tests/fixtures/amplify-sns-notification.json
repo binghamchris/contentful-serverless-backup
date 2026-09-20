@@ -1,0 +1,16 @@
+{
+  "Records": [
+    {
+      "EventSource": "aws:sns",
+      "EventVersion": "1.0",
+      "Sns": {
+        "Type": "Notification",
+        "MessageId": "cccccccc-dddd-eeee-ffff-000000000000",
+        "TopicArn": "arn:aws:sns:eu-central-1:123456789012:amplify-main-branch-notifications",
+        "Subject": "Build notification from AWS Amplify Console for app: main",
+        "Message": "{\"jobId\":\"42\",\"appId\":\"d123abc\",\"region\":\"eu-central-1\",\"branch\":\"main\",\"jobStatus\":\"SUCCEED\",\"appUrl\":\"https://main.d123abc.amplifyapp.com\"}",
+        "Timestamp": "2026-09-20T04:50:00.000Z"
+      }
+    }
+  ]
+}

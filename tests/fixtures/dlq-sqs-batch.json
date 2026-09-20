@@ -1,0 +1,15 @@
+{
+  "Records": [
+    {
+      "messageId": "11111111-2222-3333-4444-555555555555",
+      "receiptHandle": "AQEB-example",
+      "body": "{\"phase\":\"export\",\"error\":\"Contentful export failed after retries\",\"messageId\":\"11111111-2222-3333-4444-555555555555\"}",
+      "attributes": {
+        "ApproximateReceiveCount": "3",
+        "MessageDeduplicationId": "1758340320000"
+      },
+      "eventSource": "aws:sqs",
+      "eventSourceARN": "arn:aws:sqs:eu-central-1:123456789012:contentfulBackupDLQ.fifo"
+    }
+  ]
+}

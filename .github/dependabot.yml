@@ -1,0 +1,49 @@
+version: 2
+# Dependency surveillance across all four npm manifests. Task 19.
+# @aws-sdk packages are grouped (they version in lockstep and churn weekly);
+# contentful-export is left ungrouped so a major bump is reviewed on its own.
+updates:
+  - package-ecosystem: npm
+    directory: /backup-lambda
+    schedule:
+      interval: weekly
+    groups:
+      aws-sdk:
+        patterns:
+          - "@aws-sdk/*"
+          - "@smithy/*"
+
+  - package-ecosystem: npm
+    directory: /filter-lambda
+    schedule:
+      interval: weekly
+    groups:
+      aws-sdk:
+        patterns:
+          - "@aws-sdk/*"
+          - "@smithy/*"
+
+  - package-ecosystem: npm
+    directory: /notifier-lambda
+    schedule:
+      interval: weekly
+    groups:
+      aws-sdk:
+        patterns:
+          - "@aws-sdk/*"
+          - "@smithy/*"
+
+  - package-ecosystem: npm
+    directory: /deploy
+    schedule:
+      interval: weekly
+    groups:
+      aws-sdk:
+        patterns:
+          - "@aws-sdk/*"
+          - "@smithy/*"
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
