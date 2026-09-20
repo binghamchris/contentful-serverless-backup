@@ -126,23 +126,35 @@ const reconcileAssets = (result, exportDir) => {
   const assets = (result && result.assets) || [];
   const missing = [];
   const wrongSize = [];
+
+  // A file field is either the locale-wrapped form { "<locale>": { url, details } }
+  // (the locale key varies by space — en-US, en-GB, de-DE, ...) or, rarely, a
+  // bare { url, details }. Do NOT assume a specific locale: collect every file
+  // entry that actually carries a url. Assuming "en-US" silently skipped EVERY
+  // asset on an en-GB space, turning the completeness check into a no-op.
+  const fileEntriesOf = (file) => {
+    if (!file || typeof file !== 'object') return [];
+    if (typeof file.url === 'string') return [file]; // bare form
+    return Object.values(file).filter((v) => v && typeof v === 'object' && typeof v.url === 'string');
+  };
+
   for (const asset of assets) {
     const file = asset && asset.fields && asset.fields.file;
-    const locale = file && (file['en-US'] || file);
-    const url = locale && locale.url;
-    const expectedSize = locale && locale.details && locale.details.size;
-    if (!url) continue;
-    const relative = String(url).replace(/^https?:\/\//, '').replace(/^\/\//, '');
-    const localPath = path.join(exportDir, relative);
-    if (!fs.existsSync(localPath)) {
-      missing.push(relative);
-      continue;
-    }
-    if (typeof expectedSize === 'number') {
-      const actual = fs.statSync(localPath).size;
-      if (actual !== expectedSize) wrongSize.push(`${relative} (${actual} != ${expectedSize})`);
-    } else if (fs.statSync(localPath).size === 0) {
-      wrongSize.push(`${relative} (zero bytes, no expected size)`);
+    for (const entry of fileEntriesOf(file)) {
+      const url = entry.url;
+      const expectedSize = entry.details && entry.details.size;
+      const relative = String(url).replace(/^https?:\/\//, '').replace(/^\/\//, '');
+      const localPath = path.join(exportDir, relative);
+      if (!fs.existsSync(localPath)) {
+        missing.push(relative);
+        continue;
+      }
+      if (typeof expectedSize === 'number') {
+        const actual = fs.statSync(localPath).size;
+        if (actual !== expectedSize) wrongSize.push(`${relative} (${actual} != ${expectedSize})`);
+      } else if (fs.statSync(localPath).size === 0) {
+        wrongSize.push(`${relative} (zero bytes, no expected size)`);
+      }
     }
   }
   return { total: assets.length, missing, wrongSize };

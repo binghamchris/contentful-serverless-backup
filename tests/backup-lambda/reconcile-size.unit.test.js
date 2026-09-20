@@ -49,6 +49,27 @@ function withTree(assets, files) {
 }
 
 const asset = (url, size) => ({ fields: { file: { 'en-US': { url, details: { size } } } } });
+const assetGB = (url, size) => ({ fields: { file: { 'en-GB': { url, details: { size } } } } });
+const assetBare = (url, size) => ({ fields: { file: { url, details: { size } } } });
+
+describe('reconcileAssets: locale-agnostic (regression for the en-US-only bug)', () => {
+  it('checks en-GB assets — the en-US-only assumption made this a no-op on en-GB spaces', () => {
+    // A wrong-size en-GB asset MUST be flagged; before the fix it was skipped.
+    const { total, wrongSize } = withTree([assetGB('https://img/gb.png', 100)], { 'img/gb.png': 40 });
+    assert.equal(total, 1);
+    assert.equal(wrongSize.length, 1, 'en-GB asset size mismatch must be caught');
+  });
+
+  it('checks a bare (non-locale-wrapped) file entry', () => {
+    const { wrongSize } = withTree([assetBare('https://img/b.png', 50)], { 'img/b.png': 10 });
+    assert.equal(wrongSize.length, 1);
+  });
+
+  it('flags a MISSING en-GB asset', () => {
+    const { missing } = withTree([assetGB('https://img/gone.png', 10)], {});
+    assert.equal(missing.length, 1);
+  });
+});
 
 describe('reconcileAssets: by SIZE against details.size, not existence', () => {
   it('reports complete when every asset file matches its declared size', () => {
