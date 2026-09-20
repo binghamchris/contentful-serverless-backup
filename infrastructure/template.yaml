@@ -224,20 +224,19 @@ Resources:
     Properties:
       Architectures:
         - arm64
-      # MemorySize: the previous value of 450 was not a tuned figure but a
-      # stale one the workload had outgrown — the largest current backup
-      # consumes ~950 MB, so the function was being OOM-killed on its largest
-      # runs (a cause of the silent-failure symptom). This is the interim
-      # value for the two-pass deployment; the commissioning export (see
-      # tasks.md task 14) measures the real envelope and a second stack
-      # update sets the final. 1536, not 1024, because 1024 leaves no
-      # headroom over a known 950 MB peak.
-      MemorySize: 1536
-      # Ephemeral storage interim; measured down at commissioning. Above
-      # 512 MB bills at fractions of a cent per invocation. Note the nested
-      # EphemeralStorage.Size shape — a flat EphemeralStorageSize is rejected.
+      # MemorySize: FINAL value, set from the commissioning export
+      # (docs/backup-reliability-and-modernisation/commissioning-export.md).
+      # Measured peak on the largest production space was 378 MB — far below
+      # the 950 MB the interim assumed (the streaming redesign removed the old
+      # buffer-everything memory). 768 MB is ~2x the measured peak: comfortable
+      # headroom for content growth, and memory also buys CPU which keeps the
+      # ~14 s archiving fast. Both memory and duration sit far under the
+      # 70%-of-ceiling flag (10240 MB / 900 s).
+      MemorySize: 768
+      # Ephemeral storage FINAL. Measured /tmp use (export tree ~ a few MB of
+      # JSON + a 88 MB archive) fits easily; 1024 MB leaves generous headroom.
       EphemeralStorage:
-        Size: 2048
+        Size: 1024
       Runtime: nodejs24.x
       Handler: index.handler
       LoggingConfig:

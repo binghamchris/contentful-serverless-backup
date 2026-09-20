@@ -118,7 +118,7 @@ Tasks 1–7 are template and test-harness work that requires **no dependency cha
   - _Requirements: 0.7, 10.1–10.10, 16.11, 16.12, 34.8_
   - _Verify: all of Requirement 10 (each induced failure emails; success and no-backup-needed produce no email); results committed under `docs/`._
 
-- [ ] **15. Finalise the sizing and the tags decision (second stack update).**
+- [x] **15. Finalise the sizing and the tags decision (second stack update).**
   - Set `MemorySize`/`EphemeralStorageSize` from the measured envelope; set the grace period from the measured build durations; decide the `maxAllowedLimit` default and the tags/published-state question from the commissioning record, amending the design decision record if tags are dropped.
   - _Requirements: 14.x (tags), 16.5, 16.6, 42.7_
 
