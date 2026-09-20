@@ -122,23 +122,23 @@ Tasks 1–7 are template and test-harness work that requires **no dependency cha
   - Set `MemorySize`/`EphemeralStorageSize` from the measured envelope; set the grace period from the measured build durations; decide the `maxAllowedLimit` default and the tags/published-state question from the commissioning record, amending the design decision record if tags are dropped.
   - _Requirements: 14.x (tags), 16.5, 16.6, 42.7_
 
-- [ ] **16. S3 lifecycle, bucket policy, and conditional durability features.**
+- [x] **16. S3 lifecycle, bucket policy, and conditional durability features.**
   - Lifecycle: **no current-version expiry**; `NoncurrentVersionExpiration` bounded ≥ ~150 days against the transition; `ExpiredObjectDeleteMarker`; `AbortIncompleteMultipartUpload` (1 day); short-TTL expiry on the staging prefix; transition at `TransitionDays` (default 60) to `LongTermStorageClass`.
   - `UpdateReplacePolicy: Retain` on the bucket; `OwnershipControls: BucketOwnerEnforced`; the TLS-and-SSE-header bucket policy (mismatch test, proven against a real multipart upload); **no** access logging.
   - Condition-gated replication and Object Lock, `!Ref AWS::NoValue` when off, every supporting parameter defaulted and every supporting resource gated; Object Lock retention bounded against the noncurrent retention.
   - _Requirements: 34.1–34.11, 35.1–35.5, 36.1–36.18, 37.1–37.8, 38.1–38.7_
   - _Verify: tests for noncurrent expiry, no current-version expiry, the required-parameter set excluding both features' params, and no `LoggingConfiguration` / no second bucket._
 
-- [ ] **17. Multi-environment: remove fixed physical names; outputs; tags.**
+- [x] **17. Multi-environment: remove fixed physical names; outputs; tags.**
   - Remove `RoleName` from both roles; derive queue names from the stack (FIFO suffix, ≤80 chars); publish outputs for the bucket, all three queues, all three function names, the Alert_Topic; document stack-level cost-allocation tags.
   - _Requirements: 41.1–41.6, 43.1–43.4_
   - _Verify: the property test widened to all physical names, including via a parameter default._
 
-- [ ] **18. Deployment script: reproducible, gated, traceable.**
+- [x] **18. Deployment script: reproducible, gated, traceable.**
   - Allow-list packaging; refuse on dirty tree, absent `node_modules`, or a matched credential file; `npm ci --omit=dev`; validate every env var with a named message; explicit region; `Publish: true`; record the commit as a function **tag**; prune to 3 published versions; read function names from stack outputs; a placeholder-SHA verification command; sweep the identical dead status-code branch in `build-lambda.js`.
   - _Requirements: 29.1–29.8, 30.1–30.4, 31.1–31.7, 32.1–32.4_
 
-- [ ] **19. CI, dependency surveillance, and executable deployment docs.**
+- [x] **19. CI, dependency surveillance, and executable deployment docs.**
   - A CI workflow (push + PR) that runs `npm ci`, the full suite, the linters, `cfn-lint`/policy scan, and `npm audit --omit=dev` at a documented threshold — no deploy, no long-lived credentials, no Contentful call, on Node 24; scheduled audit re-run; Dependabot across all four manifests (`@aws-sdk` grouped, `contentful-export` ungrouped).
   - Rewrite the deployment docs to be executable as written (literal command with `--capabilities CAPABILITY_NAMED_IAM`, region, profile, template path; every parameter documented; the ordered two-pass deployment and the subscription-confirmation gate).
   - _Requirements: 28.1–28.7, 33.1–33.6, 44.3, 53.1–53.6_
