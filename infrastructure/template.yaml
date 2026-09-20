@@ -113,6 +113,52 @@ Parameters:
     Default: 200
     MinValue: 50
     MaxValue: 1000
+  TransitionDays:
+    Type: Number
+    Description: Days after creation before a current object transitions to LongTermStorageClass
+    Default: 60
+    MinValue: 1
+    MaxValue: 3650
+  NoncurrentVersionRetentionDays:
+    Type: Number
+    Description: Days to retain a noncurrent object version before expiry. Bounded well above TransitionDays so a version is never expired before it has transitioned.
+    Default: 210
+    MinValue: 150
+    MaxValue: 3650
+  StagingExpiryDays:
+    Type: Number
+    Description: Short TTL for objects under the staging prefix (reaped without any delete permission on a role)
+    Default: 1
+    MinValue: 1
+    MaxValue: 30
+  EnableReplication:
+    Type: String
+    Description: OFF by default opt-in. When true, cross-region replication is configured; requires ReplicationDestinationBucketArn and ReplicationRoleArn.
+    Default: 'false'
+    AllowedValues:
+      - 'true'
+      - 'false'
+  ReplicationDestinationBucketArn:
+    Type: String
+    Description: Destination bucket ARN for replication (only used when EnableReplication is true)
+    Default: ''
+  ReplicationRoleArn:
+    Type: String
+    Description: IAM role ARN S3 assumes for replication (only used when EnableReplication is true)
+    Default: ''
+  EnableObjectLock:
+    Type: String
+    Description: OFF by default opt-in. When true, S3 Object Lock is enabled in GOVERNANCE mode with a bounded retention.
+    Default: 'false'
+    AllowedValues:
+      - 'true'
+      - 'false'
+  ObjectLockRetentionDays:
+    Type: Number
+    Description: Object Lock default retention in days (only used when EnableObjectLock is true). Bounded against NoncurrentVersionRetentionDays.
+    Default: 30
+    MinValue: 1
+    MaxValue: 3650
   AlertEmail:
     Type: String
     Description: Email address to receive backup-failure alerts
@@ -141,6 +187,8 @@ Parameters:
 Conditions:
   ShouldSubscribeAlertEmail: !Equals [!Ref SubscribeAlertEmail, 'true']
   MappingsEnabled: !Equals [!Ref EventSourceMappingEnabled, 'true']
+  ReplicationEnabled: !Equals [!Ref EnableReplication, 'true']
+  ObjectLockEnabled: !Equals [!Ref EnableObjectLock, 'true']
 
 Resources:
   BackupLogGroup:
@@ -635,6 +683,7 @@ Resources:
   BackupBucket:
     Type: AWS::S3::Bucket
     DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       BucketName: !Ref S3BackupBucketName
       BucketEncryption:
@@ -643,6 +692,34 @@ Resources:
               SSEAlgorithm: AES256
       VersioningConfiguration:
         Status: Enabled
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      # Object Lock is an OFF-by-default opt-in; NoValue when disabled so it is
+      # never required to deploy. (Object Lock also requires versioning, which
+      # is always on above.)
+      ObjectLockEnabled: !If [ObjectLockEnabled, true, !Ref 'AWS::NoValue']
+      ObjectLockConfiguration: !If
+        - ObjectLockEnabled
+        - ObjectLockEnabled: Enabled
+          Rule:
+            DefaultRetention:
+              Mode: GOVERNANCE
+              Days: !Ref ObjectLockRetentionDays
+        - !Ref 'AWS::NoValue'
+      ReplicationConfiguration: !If
+        - ReplicationEnabled
+        - Role: !Ref ReplicationRoleArn
+          Rules:
+            - Id: ReplicateAll
+              Status: Enabled
+              Priority: 0
+              DeleteMarkerReplication:
+                Status: Enabled
+              Filter: {}
+              Destination:
+                Bucket: !Ref ReplicationDestinationBucketArn
+        - !Ref 'AWS::NoValue'
       PublicAccessBlockConfiguration:
         BlockPublicAcls: true
         BlockPublicPolicy: true
@@ -650,12 +727,57 @@ Resources:
         RestrictPublicBuckets: true
       LifecycleConfiguration:
         Rules:
-          - Id: BackupsExpiration
+          # NO current-version expiry: criterion 34.9 requires the newest
+          # archive retained unconditionally, and S3 lifecycle has no
+          # "newest object" predicate, so current versions are never expired.
+          - Id: TransitionCurrentToLongTerm
             Status: Enabled
-            ExpirationInDays: 1095
             Transitions:
-              - TransitionInDays: 60
+              - TransitionInDays: !Ref TransitionDays
                 StorageClass: !Ref LongTermStorageClass
+          - Id: ExpireNoncurrentVersions
+            Status: Enabled
+            NoncurrentVersionExpiration:
+              NoncurrentDays: !Ref NoncurrentVersionRetentionDays
+          - Id: RemoveExpiredDeleteMarkers
+            Status: Enabled
+            ExpiredObjectDeleteMarker: true
+          - Id: AbortIncompleteMultipartUploads
+            Status: Enabled
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 1
+          - Id: ExpireStagingPrefix
+            Status: Enabled
+            Prefix: staging/
+            ExpirationInDays: !Ref StagingExpiryDays
+
+  BackupBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref BackupBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: DenyNonTLS
+            Effect: Deny
+            Principal: '*'
+            Action: s3:*
+            Resource:
+              - !GetAtt BackupBucket.Arn
+              - !Sub ${BackupBucket.Arn}/*
+            Condition:
+              Bool:
+                aws:SecureTransport: 'false'
+          - Sid: DenyUnencryptedPutObject
+            Effect: Deny
+            Principal: '*'
+            Action: s3:PutObject
+            Resource: !Sub ${BackupBucket.Arn}/*
+            Condition:
+              StringNotEquals:
+                s3:x-amz-server-side-encryption:
+                  - AES256
+                  - aws:kms
 
 Outputs:
   AlertTopicArn:
