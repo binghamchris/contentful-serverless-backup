@@ -49,4 +49,32 @@ describe('Documentation unit tests', () => {
       assert.ok(!fs.existsSync(oldPath), 'deploy/deploy.yaml should not exist');
     });
   });
+
+  describe('Req 33: deployment docs are executable and complete', () => {
+    const { loadTemplate } = require('../helpers/cfn-template');
+    const readme = fs.readFileSync(path.join(__dirname, '../../deploy/README.md'), 'utf-8');
+
+    it('documents every template parameter by name', () => {
+      const params = Object.keys(loadTemplate().Parameters);
+      const undocumented = params.filter((p) => !readme.includes(p));
+      assert.deepEqual(undocumented, [], `undocumented parameters: ${undocumented.join(', ')}`);
+    });
+
+    it('contains a literal, executable deploy command with capabilities, region and template path', () => {
+      assert.match(readme, /aws cloudformation deploy/);
+      assert.match(readme, /--capabilities CAPABILITY_IAM/);
+      assert.match(readme, /--region eu-central-1/);
+      assert.match(readme, /--template-file infrastructure\/template\.yaml/);
+    });
+
+    it('describes the two-pass ordering and the subscription-confirmation gate', () => {
+      assert.match(readme, /two-pass/i);
+      assert.match(readme, /EventSourceMappingEnabled=false/);
+      assert.match(readme, /[Cc]onfirm the email subscription/);
+    });
+
+    it('references no former template location', () => {
+      assert.ok(!readme.includes('deploy/deploy.yaml'), 'must not reference the old template path');
+    });
+  });
 });
