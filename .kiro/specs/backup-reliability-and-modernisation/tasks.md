@@ -35,7 +35,7 @@ Tasks 1–7 are template and test-harness work that requires **no dependency cha
   - _Requirements: 3.1–3.6, 39.1–39.7_
   - _Verify: a test asserting `MessageRetentionPeriod ≥ 2 × VisibilityTimeout × MaxReceiveCount`, `VisibilityTimeout ≥ 6 × Backup Timeout`, and a policy on each of the three queues._
 
-- [ ] **4. Alert channel, fail-closed placeholder (except the Notifier), and gated mappings.**
+- [x] **4. Alert channel, fail-closed placeholder (except the Notifier), and gated mappings.**
   - Add the `AlertTopic` (standard SNS, SSE with at least the AWS-managed key), a validated `AlertEmail` parameter, and a `SubscribeAlertEmail`-gated email subscription so a validation stack can omit it; publish the topic ARN as an output. Enumerate its permitted publishers.
   - Change both existing functions' inline placeholder to `throw`. Add the `NotifierLambdaFunc` with a placeholder that **publishes** "code never applied" and does not throw.
   - Add an `EventSourceMappingEnabled` parameter (default `true`) gating **both** the source-queue mapping and the new DLQ→Notifier mapping (`BatchSize: 1`).

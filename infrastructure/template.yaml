@@ -99,6 +99,34 @@ Parameters:
     Default: 2
     MinValue: 1
     MaxValue: 10
+  AlertEmail:
+    Type: String
+    Description: Email address to receive backup-failure alerts
+    AllowedPattern: '^$|^[^@\s]+@[^@\s]+\.[^@\s]+$'
+    ConstraintDescription: Must be a valid email address, or empty when SubscribeAlertEmail is false
+    Default: ''
+  SubscribeAlertEmail:
+    Type: String
+    Description: Whether to create the email subscription on the alert topic (set false for a validation-only stack)
+    Default: 'true'
+    AllowedValues:
+      - 'true'
+      - 'false'
+  EventSourceMappingEnabled:
+    Type: String
+    Description: Whether the SQS event-source mappings are enabled (set false to deploy the stack before running the commissioning export)
+    Default: 'true'
+    AllowedValues:
+      - 'true'
+      - 'false'
+  NotifierLambdaFunctionName:
+    Type: String
+    Description: The name of the Notifier Lambda function
+    Default: contentful-backup-notifier
+
+Conditions:
+  ShouldSubscribeAlertEmail: !Equals [!Ref SubscribeAlertEmail, 'true']
+  MappingsEnabled: !Equals [!Ref EventSourceMappingEnabled, 'true']
 
 Resources:
   BackupLogGroup:
@@ -382,8 +410,132 @@ Resources:
     Properties:
       BatchSize: 1
       EventSourceArn: !GetAtt SQSQueue.Arn
-      Enabled: true
+      Enabled: !If [MappingsEnabled, true, false]
       FunctionName: !GetAtt BackupLambdaFunc.Arn
+
+  NotifierLambdaFunc:
+    Type: AWS::Lambda::Function
+    DependsOn: NotifierLogGroup
+    Properties:
+      Architectures:
+        - arm64
+      Runtime: nodejs20.x
+      Handler: index.handler
+      LoggingConfig:
+        LogFormat: JSON
+        ApplicationLogLevel: !Ref ApplicationLogLevel
+        LogGroup: !Ref NotifierLogGroup
+      Environment:
+        Variables:
+          ALERT_TOPIC_ARN: !Ref AlertTopic
+      Code:
+        ZipFile: |
+          const { SNSClient, PublishCommand } = require('@aws-sdk/client-sns');
+          // Fail-OPEN placeholder: unlike the other functions, the Notifier's
+          // placeholder PUBLISHES rather than throws. The Notifier's whole job
+          // is to raise the alarm on a dead-lettered backup; if its real code
+          // was never deployed, throwing would make the last-resort alerter
+          // itself silent. So it publishes "code never applied" and returns.
+          exports.handler = async () => {
+            const client = new SNSClient({});
+            await client.send(new PublishCommand({
+              TopicArn: process.env.ALERT_TOPIC_ARN,
+              Subject: 'Contentful backup notifier: code never applied',
+              Message: 'The Notifier Lambda placeholder is still deployed. A backup was dead-lettered but the real notifier code was never applied. Investigate immediately.',
+            }));
+            return true;
+          };
+      FunctionName: !Ref NotifierLambdaFunctionName
+      Role: !GetAtt NotifierLambdaRole.Arn
+      Timeout: 30
+
+  NotifierLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: ContentfulBackupNotifierLambdaRole
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Policies:
+        - PolicyName: ContentfulBackupNotifierLambdaPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - sns:Publish
+                Resource: !Ref AlertTopic
+              - Effect: Allow
+                Action:
+                  - sqs:ReceiveMessage
+                  - sqs:DeleteMessage
+                  - sqs:GetQueueAttributes
+                Resource: !GetAtt DeadLetterQueue.Arn
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource:
+                  - !Sub ${NotifierLogGroup.Arn}:*
+
+  NotifierDLQTrigger:
+    Type: AWS::Lambda::EventSourceMapping
+    DependsOn: NotifierLambdaRole
+    Properties:
+      BatchSize: 1
+      EventSourceArn: !GetAtt DeadLetterQueue.Arn
+      Enabled: !If [MappingsEnabled, true, false]
+      FunctionName: !GetAtt NotifierLambdaFunc.Arn
+
+  AlertTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      # No explicit TopicName: an explicit name would collide with the
+      # BackupLambdaFunctionName default substring and pin the resource,
+      # preventing clean replacement. CloudFormation generates a unique name.
+      # SSE with at least the AWS-managed key for SNS.
+      KmsMasterKeyId: alias/aws/sns
+
+  AlertTopicPolicy:
+    Type: AWS::SNS::TopicPolicy
+    Properties:
+      Topics:
+        - !Ref AlertTopic
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          # Enumerated permitted publishers: only the three functions' roles.
+          - Sid: PermittedPublishers
+            Effect: Allow
+            Principal:
+              AWS:
+                - !GetAtt BackupLambdaRole.Arn
+                - !GetAtt FilterLambdaRole.Arn
+                - !GetAtt NotifierLambdaRole.Arn
+            Action: sns:Publish
+            Resource: !Ref AlertTopic
+          - Sid: DenyNonTLS
+            Effect: Deny
+            Principal: '*'
+            Action: sns:Publish
+            Resource: !Ref AlertTopic
+            Condition:
+              Bool:
+                aws:SecureTransport: 'false'
+
+  AlertEmailSubscription:
+    Type: AWS::SNS::Subscription
+    Condition: ShouldSubscribeAlertEmail
+    Properties:
+      Protocol: email
+      Endpoint: !Ref AlertEmail
+      TopicArn: !Ref AlertTopic
 
   FilterSNSTrigger:
     Type: AWS::Lambda::Permission
@@ -424,3 +576,19 @@ Resources:
             Transitions:
               - TransitionInDays: 60
                 StorageClass: !Ref LongTermStorageClass
+
+Outputs:
+  AlertTopicArn:
+    Description: ARN of the SNS topic that carries backup-failure alerts
+    Value: !Ref AlertTopic
+    Export:
+      Name: !Sub ${AWS::StackName}-AlertTopicArn
+  SourceQueueUrl:
+    Description: URL of the source backup queue
+    Value: !GetAtt SQSQueue.QueueUrl
+  DeadLetterQueueUrl:
+    Description: URL of the dead-letter queue consumed by the Notifier
+    Value: !GetAtt DeadLetterQueue.QueueUrl
+  TerminalQueueUrl:
+    Description: URL of the terminal queue holding messages that exhausted DLQ redrive
+    Value: !GetAtt TerminalQueue.QueueUrl
