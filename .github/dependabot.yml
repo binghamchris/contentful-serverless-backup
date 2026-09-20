@@ -12,7 +12,6 @@ updates:
         patterns:
           - "@aws-sdk/*"
           - "@smithy/*"
-    ignore: []
 
   - package-ecosystem: npm
     directory: /filter-lambda
