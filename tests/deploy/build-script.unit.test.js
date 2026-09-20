@@ -95,5 +95,33 @@ describe('Build script unit tests', () => {
       delete process.env.__TEST_ABSENT__;
       assert.throws(() => requireEnv('__TEST_ABSENT__'), /__TEST_ABSENT__/);
     });
+
+    it('does NOT false-positive on vendored SDK files named ...Credentials... in node_modules', () => {
+      const fs = require('node:fs');
+      const os = require('node:os');
+      const path = require('node:path');
+      const { collectAllowedFiles } = require('../../deploy/build-lambda.js');
+      const root = fs.mkdtempSync(path.join(process.env.KIROCREW_SCRATCH || os.tmpdir(), 'pkg-'));
+      try {
+        // A legitimate vendored file whose name matches /credentials/i, plus a
+        // stray .pem in the function's OWN source under an allow-listed path.
+        const vendored = path.join(root, 'node_modules/@aws-sdk/client-sso/dist-es/commands');
+        fs.mkdirSync(vendored, { recursive: true });
+        fs.writeFileSync(path.join(vendored, 'GetRoleCredentialsCommand.js'), '// sdk');
+        fs.writeFileSync(path.join(root, 'index.js'), '// handler');
+        const files = collectAllowedFiles(root).map((f) => f.rel);
+        assert.ok(files.some((r) => r.includes('GetRoleCredentialsCommand.js')),
+          'vendored credentials-named SDK file must be packaged, not refused');
+        assert.ok(files.some((r) => r === 'index.js'), 'the handler must be packaged');
+
+        // A credential-shaped file inside node_modules is tolerated (vendored);
+        // the same name OUTSIDE node_modules would be refused.
+        fs.writeFileSync(path.join(root, 'node_modules', 'server.pem'), 'x');
+        assert.doesNotThrow(() => collectAllowedFiles(root),
+          'a .pem inside node_modules must not trip the guard');
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    });
   });
 });

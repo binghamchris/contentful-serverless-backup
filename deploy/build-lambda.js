@@ -86,7 +86,13 @@ function collectAllowedFiles(root) {
 function walk(abs, root, files) {
   const stat = fs.statSync(abs);
   const rel = path.relative(root, abs);
-  if (CREDENTIAL_PATTERNS.some((re) => re.test(rel))) {
+  // The credential-shape guard protects against a stray secret in the
+  // function's OWN source (a .env, a credentials.json, a *.pem). It must NOT
+  // apply inside node_modules, where legitimate vendored files carry names
+  // like GetRoleCredentialsCommand.js — matching /credentials/i on those is a
+  // false positive that blocks every deploy.
+  const inVendored = rel.split(path.sep).includes('node_modules');
+  if (!inVendored && CREDENTIAL_PATTERNS.some((re) => re.test(rel))) {
     throw new Error(`Refusing to package a credential-shaped file: ${rel}`);
   }
   if (stat.isDirectory()) {
