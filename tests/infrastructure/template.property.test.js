@@ -3,60 +3,14 @@
 
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
-const yaml = require('js-yaml');
+const { loadTemplate, collectStrings } = require('../helpers/cfn-template');
 
-// Define custom YAML types for CloudFormation intrinsic functions so js-yaml can parse the template
-const cfnTags = [
-  'Ref', 'Sub', 'GetAtt', 'Join', 'Select', 'Split', 'If',
-  'Equals', 'And', 'Or', 'Not', 'FindInMap', 'Base64',
-  'Cidr', 'ImportValue', 'GetAZs', 'Condition', 'Transform',
-].flatMap((fn) => {
-  return ['scalar', 'sequence', 'mapping'].map((kind) =>
-    new yaml.Type(`!${fn}`, {
-      kind,
-      construct: (data) => ({ [`Fn::${fn}`]: data }),
-    })
-  );
-});
-
-const CFN_SCHEMA = yaml.DEFAULT_SCHEMA.extend(cfnTags);
-
-const templatePath = path.join(__dirname, '../../infrastructure/template.yaml');
-const templateContent = fs.readFileSync(templatePath, 'utf8');
-const template = yaml.load(templateContent, { schema: CFN_SCHEMA });
+const template = loadTemplate();
 
 // Extract the default hardcoded Lambda function names from Parameters
 const backupDefault = template.Parameters.BackupLambdaFunctionName.Default;
 const filterDefault = template.Parameters.FilterLambdaFunctionName.Default;
 const hardcodedNames = [backupDefault, filterDefault];
-
-/**
- * Recursively collect all plain string values from an object/array.
- * Skips intrinsic function marker objects (Fn::Ref, Fn::Sub, etc.)
- * Returns an array of { path: string, value: string } entries.
- */
-function collectStrings(obj, currentPath = '') {
-  const results = [];
-  if (obj === null || obj === undefined) return results;
-  if (typeof obj === 'string') {
-    results.push({ path: currentPath, value: obj });
-    return results;
-  }
-  if (Array.isArray(obj)) {
-    obj.forEach((item, i) => {
-      results.push(...collectStrings(item, `${currentPath}[${i}]`));
-    });
-    return results;
-  }
-  if (typeof obj === 'object') {
-    for (const [key, val] of Object.entries(obj)) {
-      results.push(...collectStrings(val, currentPath ? `${currentPath}.${key}` : key));
-    }
-  }
-  return results;
-}
 
 describe('Property 9: No hardcoded Lambda function names outside parameter defaults', () => {
   it('should not contain hardcoded Lambda function names in any resource properties', () => {

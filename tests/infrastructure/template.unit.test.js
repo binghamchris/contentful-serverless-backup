@@ -3,48 +3,9 @@
 
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
-const yaml = require('js-yaml');
+const { loadTemplate } = require('../helpers/cfn-template');
 
-// Reuse the same CFN_SCHEMA approach from template.property.test.js
-const cfnTags = [
-  'Ref', 'Sub', 'GetAtt', 'Join', 'Select', 'Split', 'If',
-  'Equals', 'And', 'Or', 'Not', 'FindInMap', 'Base64',
-  'Cidr', 'ImportValue', 'GetAZs', 'Condition', 'Transform',
-].flatMap((fn) => {
-  return ['scalar', 'sequence', 'mapping'].map((kind) =>
-    new yaml.Type(`!${fn}`, {
-      kind,
-      construct: (data) => ({ [`Fn::${fn}`]: data }),
-    })
-  );
-});
-
-const CFN_SCHEMA = yaml.DEFAULT_SCHEMA.extend(cfnTags);
-
-const templatePath = path.join(__dirname, '../../infrastructure/template.yaml');
-const templateContent = fs.readFileSync(templatePath, 'utf8');
-const template = yaml.load(templateContent, { schema: CFN_SCHEMA });
-
-/**
- * Recursively collect all string values from an object tree.
- */
-function collectStrings(obj) {
-  const results = [];
-  if (obj === null || obj === undefined) return results;
-  if (typeof obj === 'string') return [obj];
-  if (Array.isArray(obj)) {
-    for (const item of obj) results.push(...collectStrings(item));
-    return results;
-  }
-  if (typeof obj === 'object') {
-    for (const val of Object.values(obj)) results.push(...collectStrings(val));
-  }
-  return results;
-}
-
-// Req 7.1: FilterLambdaRole has no s3:PutObject
+const template = loadTemplate();
 describe('Req 7.1: FilterLambdaRole least-privilege', () => {
   it('should not grant s3:PutObject to FilterLambdaRole', () => {
     const filterRole = template.Resources.FilterLambdaRole;
