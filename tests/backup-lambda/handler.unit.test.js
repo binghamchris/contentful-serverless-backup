@@ -64,6 +64,8 @@ function makeStubs() {
       existsSync: () => true,
       mkdirSync: () => {},
       statSync: () => ({ size: 10 }),
+      rmSync: () => {},
+      writeFileSync: () => {},
     },
   };
 }

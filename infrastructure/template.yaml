@@ -107,6 +107,12 @@ Parameters:
     Default: 2
     MinValue: 1
     MaxValue: 10
+  MaxAllowedLimit:
+    Type: Number
+    Description: contentful-export page size. 200 is empirically-derived; the API/library ceiling is 1000, but the binding constraint is Contentful's 7 MiB response ceiling whose remedy is to LOWER this. Adaptive halving to 50 handles size errors at runtime.
+    Default: 200
+    MinValue: 50
+    MaxValue: 1000
   AlertEmail:
     Type: String
     Description: Email address to receive backup-failure alerts
@@ -202,6 +208,8 @@ Resources:
           SPACE_ENV: !Ref ContentfulSpaceEnvironment
           SPACE_ID: !Ref ContentfulSpaceId
           SQS_QUEUE_URL: !GetAtt SQSQueue.QueueUrl
+          ALERT_TOPIC_ARN: !Ref AlertTopic
+          MAX_ALLOWED_LIMIT: !Ref MaxAllowedLimit
       FunctionName: !Ref BackupLambdaFunctionName
       Role: !GetAtt BackupLambdaRole.Arn
       # 900s is the Lambda on-demand maximum; it anchors the queue timing
@@ -230,8 +238,35 @@ Resources:
               - Effect: Allow
                 Action:
                   - s3:PutObject
+                  - s3:AbortMultipartUpload
                 Resource:
                   - !Sub ${BackupBucket.Arn}/*
+              - Effect: Allow
+                # For verification (staged + final present) and promotion.
+                Action:
+                  - s3:ListBucket
+                Resource: !GetAtt BackupBucket.Arn
+              - Effect: Allow
+                # GetObject is granted ONLY on the staging prefix, for the
+                # CopyObject promotion — NOT on the archive (final) prefix.
+                # This is the narrow widening the owner chose over a delete
+                # grant.
+                Action:
+                  - s3:GetObject
+                Resource:
+                  - !Sub ${BackupBucket.Arn}/staging/*
+              - Effect: Allow
+                Action:
+                  - sns:Publish
+                Resource: !Ref AlertTopic
+              - Effect: Allow
+                Action:
+                  - kms:GenerateDataKey
+                  - kms:Decrypt
+                Resource: '*'
+                Condition:
+                  StringEquals:
+                    kms:ViaService: !Sub sns.${AWS::Region}.amazonaws.com
               - Effect: Allow
                 # Retained as the event-source mapping's poll grant (the
                 # AWSLambdaSQSQueueExecutionRole body) — removing these detaches

@@ -116,25 +116,86 @@ const verifyStagedObject = async (bucket, key, expectedBytes) => {
   return true;
 };
 
-// Assert every asset the export declared was actually written to the tree.
-// The library classifies a failed asset download as a filtered-out warning and
-// resolves with content data only, so completeness must be reconciled here from
-// the returned asset URLs against the files on disk (design.md asset section).
+// Assert every asset the export declared was actually written to the tree AND
+// is the right SIZE. The library classifies a failed asset download as a
+// filtered-out warning and resolves with content data only, so completeness
+// must be reconciled here from the returned asset metadata (design.md asset
+// section). Compares the on-disk size against details.size, not mere existence
+// — a truncated asset exists but is short.
 const reconcileAssets = (result, exportDir) => {
   const assets = (result && result.assets) || [];
   const missing = [];
+  const wrongSize = [];
   for (const asset of assets) {
     const file = asset && asset.fields && asset.fields.file;
-    const url = file && (file.url || (file['en-US'] && file['en-US'].url));
+    const locale = file && (file['en-US'] || file);
+    const url = locale && locale.url;
+    const expectedSize = locale && locale.details && locale.details.size;
     if (!url) continue;
-    // contentful-export writes assets under exportDir/images.ctfassets.net/...
     const relative = String(url).replace(/^https?:\/\//, '').replace(/^\/\//, '');
     const localPath = path.join(exportDir, relative);
-    if (!fs.existsSync(localPath) || fs.statSync(localPath).size === 0) {
+    if (!fs.existsSync(localPath)) {
       missing.push(relative);
+      continue;
+    }
+    if (typeof expectedSize === 'number') {
+      const actual = fs.statSync(localPath).size;
+      if (actual !== expectedSize) wrongSize.push(`${relative} (${actual} != ${expectedSize})`);
+    } else if (fs.statSync(localPath).size === 0) {
+      wrongSize.push(`${relative} (zero bytes, no expected size)`);
     }
   }
-  return { total: assets.length, missing };
+  return { total: assets.length, missing, wrongSize };
+};
+
+// Recursively remove and recreate the working directory (sweep-on-entry), so a
+// warm container never contaminates a new archive with a previous run's tree.
+const sweepWorkingDir = (dir) => {
+  if (fs.existsSync(dir)) fs.rmSync(dir, { recursive: true, force: true });
+  fs.mkdirSync(dir, { recursive: true });
+};
+
+// Is an error a Contentful response-size / rate-limit signal?
+const isSizeError = (err) => /response size|maxAllowedLimit|7340032|too large/i.test(err && err.message || '');
+const isRateLimitError = (err) => /rate ?limit|429|too many requests/i.test(err && err.message || '');
+
+// Run the export, halving maxAllowedLimit toward a floor of 50 on a
+// response-size error (a single adaptive descent, not a search).
+const exportWithAdaptiveLimit = async (baseOptions, startLimit) => {
+  let limit = startLimit;
+  const floor = 50;
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      const result = await contentfulExport({ ...baseOptions, maxAllowedLimit: limit });
+      return { result, limitUsed: limit };
+    } catch (err) {
+      if (isSizeError(err) && limit > floor) {
+        limit = Math.max(floor, Math.floor(limit / 2));
+        console.log(`Response-size error; halving maxAllowedLimit to ${limit}`);
+        continue;
+      }
+      throw err;
+    }
+  }
+};
+
+// Retry the staged upload in-invocation, re-creating the stream each attempt
+// (a stream cannot be replayed). Bounded so a persistent failure still throws.
+const withUploadRetry = async (fn, attempts = 3) => {
+  let lastErr;
+  for (let i = 0; i < attempts; i += 1) {
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+      if (isRateLimitError(err)) throw err; // do not hammer a rate limit
+      console.log(`Upload attempt ${i + 1} failed: ${err && err.message}`);
+    }
+  }
+  throw lastErr;
 };
 
 // Publish a failure to the alert topic, but ONLY on first delivery.
@@ -188,6 +249,9 @@ exports.handler = async (event) => {
     if (!fs.existsSync(localBackupPath)) {
       fs.mkdirSync(localBackupPath, { recursive: true });
     }
+    // Sweep-on-entry: a warm container must never carry a prior run's tree
+    // into this archive.
+    sweepWorkingDir(localBackupPath);
 
     // ---- zero-quota checks FIRST -----------------------------------------
     const ssmParameters = await ssmClient.send(new GetParametersCommand({
@@ -212,7 +276,7 @@ exports.handler = async (event) => {
       deliveryToken: contentfulDeliveryToken,
       contentFile: contentfulExportFilename,
       exportDir: localBackupPath,
-      useVerboseRenderer: false,
+      useVerboseRenderer: true,
       saveFile: true,
       // Published state only — unpublished editorial work is not captured
       // (Requirement 14). Shifts load onto the CDA rate-limit allowance.
@@ -221,23 +285,49 @@ exports.handler = async (event) => {
       includeArchived: false,
       includeExperienceOrchestration: false,
       downloadAssets: true,
-      maxAllowedLimit,
     };
-    const result = await contentfulExport(exportOptions);
-    logPhase('export', { note: 'export complete' });
+    const { result, limitUsed } = await exportWithAdaptiveLimit(exportOptions, maxAllowedLimit);
+    logPhase('export', { note: 'export complete', maxAllowedLimit: limitUsed });
     console.log(`Export complete for space ${process.env.SPACE_ID} env ${process.env.SPACE_ENV}`);
 
-    // ---- asset completeness reconciliation -------------------------------
-    const { total, missing } = reconcileAssets(result, localBackupPath);
-    if (missing.length > 0) {
-      // Any shortfall throws — the library already retried each asset with
-      // backoff, so a fresh export is a genuine retry (rate-limit-specific
-      // handling is layered in task 13).
-      throw new Error(`Asset download incomplete: ${missing.length} of ${total} assets missing`);
+    // ---- asset completeness reconciliation (by SIZE) ---------------------
+    const { total, missing, wrongSize } = reconcileAssets(result, localBackupPath);
+    let complete = true;
+    if (missing.length > 0 || wrongSize.length > 0) {
+      complete = false;
+      const detail = `${missing.length} missing, ${wrongSize.length} wrong-size of ${total} assets`;
+      // A rate-limit shortfall notifies WITHOUT throwing and records
+      // complete:false — the library already retried each asset three times
+      // with backoff, so a fresh export is the most expensive, least likely
+      // fix. Any OTHER shortfall throws (redelivery is a genuine retry).
+      if (result && result.assetDownloadRateLimited) {
+        logPhase('assets', { note: 'rate-limited shortfall — notify, do not throw', detail });
+        await publishFailureIfFirstDelivery(record, new Error(`Asset shortfall (rate-limited): ${detail}`));
+      } else {
+        throw new Error(`Asset download incomplete: ${detail}`);
+      }
     }
 
-    // ---- archive -> stream -> staging upload -----------------------------
-    const stagedBytes = await streamArchiveToS3(localBackupPath, bucket, stagingKey, storageClass);
+    // ---- manifest with fixed content-file name and per-entity counts -----
+    const manifest = {
+      complete,
+      contentFile: contentfulExportFilename,
+      counts: {
+        entries: (result.entries || []).length,
+        assets: (result.assets || []).length,
+        contentTypes: (result.contentTypes || []).length,
+        locales: (result.locales || []).length,
+      },
+      maxAllowedLimit: limitUsed,
+      createdAt: datetime.toISOString(),
+    };
+    fs.writeFileSync(path.join(localBackupPath, 'manifest.json'), JSON.stringify(manifest, null, 2));
+
+    // ---- archive -> stream -> staging upload (with in-invocation retry) --
+    // Drop the export result before archiving to free memory.
+    const stagedBytes = await withUploadRetry(() =>
+      streamArchiveToS3(localBackupPath, bucket, stagingKey, storageClass));
+    logPhase('staged', { stagingKey, stagedBytes });
     console.log(`Staged archive ${stagingKey} (${stagedBytes} bytes)`);
 
     // ---- verify staged, promote, verify final ----------------------------
@@ -249,6 +339,7 @@ exports.handler = async (event) => {
       StorageClass: storageClass,
     }));
     await verifyStagedObject(bucket, finalKey);
+    logPhase('promote', { finalKey });
     console.log(`Promoted to final key ${finalKey}`);
 
     // Success: this is the ONLY place sendResponse is returned. A clean
