@@ -8,11 +8,10 @@ const Module = require('node:module');
 const originalResolve = Module._resolveFilename;
 const stubs = {
   'dotenv': { config: () => {} },
-  // AdmZip stub: addLocalFolder throws so the IIFE's try block enters catch,
-  // which calls the stubbed process.exit (no-op) and resolves cleanly.
-  'adm-zip': class { addLocalFolder() { throw new Error('stub'); } },
+  'archiver': () => ({ on() { return this; }, pipe() { return this; }, file() { return this; }, finalize() { return Promise.resolve(); } }),
   '@aws-sdk/credential-providers': { fromIni: () => ({}) },
-  '@aws-sdk/client-lambda': { LambdaClient: class {}, UpdateFunctionCodeCommand: class {} },
+  '@aws-sdk/client-lambda': { LambdaClient: class {}, UpdateFunctionCodeCommand: class {}, TagResourceCommand: class {}, ListVersionsByFunctionCommand: class {}, DeleteFunctionCommand: class {} },
+  '@aws-sdk/client-cloudformation': { CloudFormationClient: class {}, DescribeStacksCommand: class {} },
 };
 Module._resolveFilename = function (request, parent, ...rest) {
   if (stubs[request] !== undefined) return request;
@@ -45,23 +44,16 @@ process.argv = originalArgv;
 console.log = originalLog;
 
 const expectedConfigs = {
-  backup: {
-    lambdaPath: '../backup-lambda/',
-    envVar: 'BACKUP_LAMBDA_FUNC_NAME',
-    zipFileName: 'backup-lambda.zip',
-  },
-  filter: {
-    lambdaPath: '../filter-lambda/',
-    envVar: 'FILTER_LAMBDA_FUNC_NAME',
-    zipFileName: 'filter-lambda.zip',
-  },
+  backup: { lambdaPath: '../backup-lambda/', outputKey: 'BackupFunctionName', zipFileName: 'backup-lambda.zip' },
+  filter: { lambdaPath: '../filter-lambda/', outputKey: 'FilterFunctionName', zipFileName: 'filter-lambda.zip' },
+  notifier: { lambdaPath: '../notifier-lambda/', outputKey: 'NotifierFunctionName', zipFileName: 'notifier-lambda.zip' },
 };
 
 describe('Property 7: Build script config selection maps arguments to correct Lambda configuration', () => {
   it('should return correct config for valid Lambda identifiers', () => {
     fc.assert(
       fc.property(
-        fc.constantFrom('backup', 'filter'),
+        fc.constantFrom('backup', 'filter', 'notifier'),
         (target) => {
           const config = getConfig(target);
           const expected = expectedConfigs[target];
@@ -69,8 +61,8 @@ describe('Property 7: Build script config selection maps arguments to correct La
           assert.notEqual(config, null, `getConfig("${target}") should not return null`);
           assert.equal(config.lambdaPath, expected.lambdaPath,
             `lambdaPath for "${target}" should be "${expected.lambdaPath}"`);
-          assert.equal(config.envVar, expected.envVar,
-            `envVar for "${target}" should be "${expected.envVar}"`);
+          assert.equal(config.outputKey, expected.outputKey,
+            `outputKey for "${target}" should be "${expected.outputKey}"`);
           assert.equal(config.zipFileName, expected.zipFileName,
             `zipFileName for "${target}" should be "${expected.zipFileName}"`);
         }

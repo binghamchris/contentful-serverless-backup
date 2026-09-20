@@ -18,14 +18,15 @@ describe('Documentation unit tests', () => {
       assert.ok(content.includes('AWS_PROFILE_NAME'), 'should contain AWS_PROFILE_NAME');
     });
 
-    it('contains BACKUP_LAMBDA_FUNC_NAME', () => {
+    it('contains STACK_NAME (function names now come from stack outputs)', () => {
       content = fs.readFileSync(envExamplePath, 'utf-8');
-      assert.ok(content.includes('BACKUP_LAMBDA_FUNC_NAME'), 'should contain BACKUP_LAMBDA_FUNC_NAME');
+      assert.ok(content.includes('STACK_NAME'), 'should contain STACK_NAME');
     });
 
-    it('contains FILTER_LAMBDA_FUNC_NAME', () => {
+    it('no longer hardcodes per-function names (read from stack outputs)', () => {
       content = fs.readFileSync(envExamplePath, 'utf-8');
-      assert.ok(content.includes('FILTER_LAMBDA_FUNC_NAME'), 'should contain FILTER_LAMBDA_FUNC_NAME');
+      assert.ok(!content.includes('BACKUP_LAMBDA_FUNC_NAME'), 'must not hardcode the backup function name');
+      assert.ok(!content.includes('FILTER_LAMBDA_FUNC_NAME'), 'must not hardcode the filter function name');
     });
   });
 

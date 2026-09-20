@@ -8,11 +8,10 @@ const Module = require('node:module');
 const originalResolve = Module._resolveFilename;
 const stubs = {
   'dotenv': { config: () => {} },
-  // AdmZip stub: addLocalFolder throws so the IIFE's try block enters catch,
-  // which calls the stubbed process.exit (no-op) and resolves cleanly.
-  'adm-zip': class { addLocalFolder() { throw new Error('stub'); } },
+  'archiver': () => ({ on() { return this; }, pipe() { return this; }, file() { return this; }, finalize() { return Promise.resolve(); } }),
   '@aws-sdk/credential-providers': { fromIni: () => ({}) },
-  '@aws-sdk/client-lambda': { LambdaClient: class {}, UpdateFunctionCodeCommand: class {} },
+  '@aws-sdk/client-lambda': { LambdaClient: class {}, UpdateFunctionCodeCommand: class {}, TagResourceCommand: class {}, ListVersionsByFunctionCommand: class {}, DeleteFunctionCommand: class {} },
+  '@aws-sdk/client-cloudformation': { CloudFormationClient: class {}, DescribeStacksCommand: class {} },
 };
 Module._resolveFilename = function (request, parent, ...rest) {
   if (stubs[request] !== undefined) return request;
