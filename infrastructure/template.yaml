@@ -233,9 +233,11 @@ Resources:
       # update sets the final. 1536, not 1024, because 1024 leaves no
       # headroom over a known 950 MB peak.
       MemorySize: 1536
-      # EphemeralStorageSize interim; measured down at commissioning. Above
-      # 512 MB bills at fractions of a cent per invocation.
-      EphemeralStorageSize: 2048
+      # Ephemeral storage interim; measured down at commissioning. Above
+      # 512 MB bills at fractions of a cent per invocation. Note the nested
+      # EphemeralStorage.Size shape — a flat EphemeralStorageSize is rejected.
+      EphemeralStorage:
+        Size: 2048
       Runtime: nodejs24.x
       Handler: index.handler
       LoggingConfig:

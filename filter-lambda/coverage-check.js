@@ -21,11 +21,18 @@
 // MUST NOT be relaxed; a unit test asserts both exclusions.
 const ARCHIVE_KEY = /^\d{4}\/\d{2}\/\d{2}\/[^/]*\.\d{3}Z\.zip$/;
 
-// Parse an ISO timestamp to epoch ms, or null if unusable.
+// Parse an ISO timestamp to epoch ms, or null if unusable. Must NEVER throw —
+// a pathological value (e.g. an object whose toString is not callable) makes
+// `new Date(value)` throw "Cannot convert object to primitive value", so the
+// conversion is guarded.
 function toEpoch(value) {
   if (value === null || value === undefined) return null;
-  const t = new Date(value).getTime();
-  return Number.isFinite(t) ? t : null;
+  try {
+    const t = new Date(value).getTime();
+    return Number.isFinite(t) ? t : null;
+  } catch {
+    return null;
+  }
 }
 
 // Parse the suppression store's 4-field JSON. An initial/unparseable value is
