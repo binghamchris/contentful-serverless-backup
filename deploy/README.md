@@ -47,6 +47,23 @@ Deploy the CloudFormation template providing the following template parameters:
 
 The CloudFormation template will deploy the two Lambda functions with non-functional placeholder code, which will be replaced in the next step.
 
+> **One residual manual step (log groups).** The functions now write to
+> stack-managed log groups (`/aws/lambda/<stack-name>/{backup,filter,notifier}`,
+> declared in the template with `DeletionPolicy: Retain`). AWS Lambda historically
+> created an *implicit* log group named `/aws/lambda/<function-name>` on first
+> invocation. Those two implicit groups (`/aws/lambda/contentful-backup` and
+> `/aws/lambda/amplify-notification-filter`, or whatever function names were used)
+> are not managed by this stack and will be left orphaned. Delete them by hand once,
+> after cutover, to stop paying their retention — CloudFormation cannot adopt or
+> delete a log group it did not create:
+>
+> ```bash
+> aws logs delete-log-group --log-group-name /aws/lambda/contentful-backup \
+>   --profile <your-dev-profile> --region eu-central-1
+> aws logs delete-log-group --log-group-name /aws/lambda/amplify-notification-filter \
+>   --profile <your-dev-profile> --region eu-central-1
+> ```
+
 ### 4. Deploy the Lambda Function Code
 
 **Please Note:** This step assumes that the workstation being used has the AWS CLI configured with credentials which have the `lambda:UpdateFunctionCode` permission on the Lambda functions deployed in the previous step.

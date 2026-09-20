@@ -59,20 +59,97 @@ Parameters:
     Type: String
     Description: The name of the Filter Lambda function
     Default: amplify-notification-filter
+  LogRetentionDays:
+    Type: Number
+    Description: Retention in days for the stack-managed Lambda log groups
+    Default: 90
+    AllowedValues:
+      - 1
+      - 3
+      - 5
+      - 7
+      - 14
+      - 30
+      - 60
+      - 90
+      - 120
+      - 150
+      - 180
+      - 365
+      - 400
+      - 545
+      - 731
+      - 1096
+      - 1827
+      - 2192
+      - 2557
+      - 2922
+      - 3288
+      - 3653
+  ApplicationLogLevel:
+    Type: String
+    Description: Application log level for the functions; constrained so it cannot rise above INFO and hide detail
+    Default: INFO
+    AllowedValues:
+      - DEBUG
+      - INFO
 
 Resources:
+  BackupLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${AWS::StackName}/backup
+      LogGroupClass: INFREQUENT_ACCESS
+      RetentionInDays: !Ref LogRetentionDays
+
+  FilterLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${AWS::StackName}/filter
+      LogGroupClass: INFREQUENT_ACCESS
+      RetentionInDays: !Ref LogRetentionDays
+
+  NotifierLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${AWS::StackName}/notifier
+      LogGroupClass: INFREQUENT_ACCESS
+      RetentionInDays: !Ref LogRetentionDays
+
   BackupLambdaFunc:
     Type: AWS::Lambda::Function
+    DependsOn: BackupLogGroup
     Properties:
       Architectures:
         - arm64
-      MemorySize: 450
+      # MemorySize: the previous value of 450 was not a tuned figure but a
+      # stale one the workload had outgrown — the largest current backup
+      # consumes ~950 MB, so the function was being OOM-killed on its largest
+      # runs (a cause of the silent-failure symptom). This is the interim
+      # value for the two-pass deployment; the commissioning export (see
+      # tasks.md task 14) measures the real envelope and a second stack
+      # update sets the final. 1536, not 1024, because 1024 leaves no
+      # headroom over a known 950 MB peak.
+      MemorySize: 1536
+      # EphemeralStorageSize interim; measured down at commissioning. Above
+      # 512 MB bills at fractions of a cent per invocation.
+      EphemeralStorageSize: 2048
       Runtime: nodejs20.x
       Handler: index.handler
+      LoggingConfig:
+        LogFormat: JSON
+        ApplicationLogLevel: !Ref ApplicationLogLevel
+        LogGroup: !Ref BackupLogGroup
       Code:
         ZipFile: |
-          exports.handler = async (event) => {
-            return true;
+          exports.handler = async () => {
+            throw new Error('Backup Lambda placeholder: deployed code was never applied');
           };
       Environment:
         Variables:
@@ -130,27 +207,27 @@ Resources:
                   - !Ref ContentfulManagementTokenArn
               - Effect: Allow
                 Action:
-                  - logs:CreateLogGroup
-                Resource:
-                  - !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:*
-              - Effect: Allow
-                Action:
                   - logs:CreateLogStream
                   - logs:PutLogEvents
                 Resource:
-                  - !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${BackupLambdaFunctionName}:*
+                  - !Sub ${BackupLogGroup.Arn}:*
 
   FilterLambdaFunc:
     Type: AWS::Lambda::Function
+    DependsOn: FilterLogGroup
     Properties:
       Architectures:
         - arm64
       Runtime: nodejs20.x
       Handler: index.handler
+      LoggingConfig:
+        LogFormat: JSON
+        ApplicationLogLevel: !Ref ApplicationLogLevel
+        LogGroup: !Ref FilterLogGroup
       Code:
         ZipFile: |
-          exports.handler = async (event) => {
-            return true;
+          exports.handler = async () => {
+            throw new Error('Filter Lambda placeholder: deployed code was never applied');
           };
       Environment:
         Variables:
@@ -184,15 +261,10 @@ Resources:
                 Resource: !GetAtt SQSQueue.Arn
               - Effect: Allow
                 Action:
-                  - logs:CreateLogGroup
-                Resource:
-                  - !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:*
-              - Effect: Allow
-                Action:
                   - logs:CreateLogStream
                   - logs:PutLogEvents
                 Resource:
-                  - !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${FilterLambdaFunctionName}:*
+                  - !Sub ${FilterLogGroup.Arn}:*
       RoleName: AmplifyNotificationFilterLambdaRole
 
   DeadLetterQueue:
