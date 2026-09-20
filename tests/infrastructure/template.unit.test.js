@@ -57,9 +57,15 @@ describe('Req 9.2: SQSQueue RedrivePolicy', () => {
     const redrivePolicy = sqsQueue.Properties.RedrivePolicy;
     assert.ok(redrivePolicy, 'SQSQueue must have a RedrivePolicy');
     assert.ok(redrivePolicy.deadLetterTargetArn, 'RedrivePolicy must have deadLetterTargetArn');
+    // maxReceiveCount is now the bounded MaxReceiveCount parameter (Ref),
+    // not a literal; the numeric bound is asserted in queue-timing.unit.test.js.
+    const mrc = redrivePolicy.maxReceiveCount;
+    const isRefOrPositive =
+      (typeof mrc === 'object' && mrc !== null && 'Fn::Ref' in mrc) ||
+      (typeof mrc === 'number' && mrc > 0);
     assert.ok(
-      typeof redrivePolicy.maxReceiveCount === 'number' && redrivePolicy.maxReceiveCount > 0,
-      `maxReceiveCount must be a positive number, got: ${redrivePolicy.maxReceiveCount}`
+      isRefOrPositive,
+      `maxReceiveCount must be a positive number or a parameter Ref, got: ${JSON.stringify(mrc)}`
     );
   });
 });

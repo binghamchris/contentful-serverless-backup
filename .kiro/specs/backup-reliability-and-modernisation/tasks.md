@@ -21,14 +21,14 @@ Tasks 1–7 are template and test-harness work that requires **no dependency cha
   - Add template-invariant tests that the template declares no alarm, no composite alarm, no metric filter, no dashboard and no scheduled/time-based trigger, and that no source file publishes a custom metric — enforcing the no-standing-cost, no-quota observability decision structurally so it cannot erode.
   - _Requirements: 45.6, 44.1, 44.2, 11.1–11.7, 50.3, 50.4_
 
-- [ ] **2. Declare stack-managed log groups and cut the functions over.**
+- [x] **2. Declare stack-managed log groups and cut the functions over.**
   - Add three `AWS::Logs::LogGroup` resources at stack-scoped names (`/aws/lambda/${AWS::StackName}/{backup,filter,notifier}`), `LogGroupClass: INFREQUENT_ACCESS`, `RetentionInDays` from a bounded `LogRetentionDays` parameter (default 90, `AllowedValues` from CloudWatch's accepted set), `DeletionPolicy: Retain`.
   - Set `LoggingConfig` (`LogFormat: JSON`, an `ApplicationLogLevel` parameter constrained so it cannot rise above `INFO`, `LogGroup` pointing at the new group) on every function, with `DependsOn` on its group.
   - Scope every `logs:CreateLogStream`/`logs:PutLogEvents` grant to the new group ARN and **remove `logs:CreateLogGroup`** from both existing roles.
   - Document the one residual manual step: the two orphaned implicit log groups must be deleted by hand.
   - _Requirements: 5.1–5.10, 40.1, 40.2, 54.12_
 
-- [ ] **3. Correct the queue timing chain and add the terminal queue.**
+- [x] **3. Correct the queue timing chain and add the terminal queue.**
   - Set `SQSQueue` `VisibilityTimeout: 5400`, `MessageRetentionPeriod: 1209600`; `MaxReceiveCount` a bounded parameter (default 2). Add the inline comment recording the `Timeout → VisibilityTimeout → MessageRetentionPeriod` coupling.
   - Add `TerminalQueue` (FIFO, no consumer). Set the `DeadLetterQueue` `VisibilityTimeout: 60`, its own `RedrivePolicy` to `TerminalQueue` with `maxReceiveCount: 2`, and `RedriveAllowPolicy` naming `SQSQueue` (source ARN built with `!Sub`, not `!GetAtt`, to avoid the circular dependency).
   - Enable `SqsManagedSseEnabled` on all three queues; add a non-TLS-deny `AWS::SQS::QueuePolicy` per queue.

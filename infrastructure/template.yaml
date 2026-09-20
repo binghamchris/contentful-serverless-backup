@@ -93,6 +93,12 @@ Parameters:
     AllowedValues:
       - DEBUG
       - INFO
+  MaxReceiveCount:
+    Type: Number
+    Description: SQS redrive maxReceiveCount for the source queue before a message is sent to the DLQ
+    Default: 2
+    MinValue: 1
+    MaxValue: 10
 
 Resources:
   BackupLogGroup:
@@ -162,7 +168,10 @@ Resources:
           SQS_QUEUE_URL: !GetAtt SQSQueue.QueueUrl
       FunctionName: !Ref BackupLambdaFunctionName
       Role: !GetAtt BackupLambdaRole.Arn
-      Timeout: 300
+      # 900s is the Lambda on-demand maximum; it anchors the queue timing
+      # chain (see SQSQueue). A longer budget would need Managed Instances,
+      # which breaks the zero-compute-at-rest posture.
+      Timeout: 900
 
   BackupLambdaRole:
     Type: AWS::IAM::Role
@@ -273,18 +282,99 @@ Resources:
       QueueName: contentfulBackupDLQ.fifo
       FifoQueue: true
       MessageRetentionPeriod: 1209600
+      SqsManagedSseEnabled: true
+      # Short visibility so a failed Notifier re-delivery from the DLQ is
+      # retried promptly; two attempts, then the message lands in the
+      # TerminalQueue rather than being lost.
+      VisibilityTimeout: 60
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt TerminalQueue.Arn
+        maxReceiveCount: 2
+      # Source ARN built with !Sub, not !GetAtt, to avoid the circular
+      # dependency SQSQueue <-> DeadLetterQueue would otherwise create.
+      RedriveAllowPolicy:
+        redrivePermission: byQueue
+        sourceQueueArns:
+          - !Sub arn:${AWS::Partition}:sqs:${AWS::Region}:${AWS::AccountId}:contentfulBackupQueue.fifo
+
+  TerminalQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: contentfulBackupTerminal.fifo
+      FifoQueue: true
+      MessageRetentionPeriod: 1209600
+      SqsManagedSseEnabled: true
 
   SQSQueue:
     Type: AWS::SQS::Queue
     Properties:
       QueueName: contentfulBackupQueue.fifo
       FifoQueue: true
-      MessageRetentionPeriod: 900
+      SqsManagedSseEnabled: true
+      # Timing chain — these three are coupled and must not be edited in
+      # isolation:
+      #   Backup Timeout (900s) -> VisibilityTimeout (>= 6x, so a retry
+      #   never overlaps a still-running invocation) -> MessageRetentionPeriod
+      #   (>= 2 x VisibilityTimeout x MaxReceiveCount, so a message survives
+      #   long enough to reach the DLQ instead of ageing out unreachable —
+      #   the original 900s retention < 1800s visibility bug).
+      MessageRetentionPeriod: 1209600
       DeduplicationScope: queue
-      VisibilityTimeout: 1800
+      VisibilityTimeout: 5400
       RedrivePolicy:
         deadLetterTargetArn: !GetAtt DeadLetterQueue.Arn
-        maxReceiveCount: 3
+        maxReceiveCount: !Ref MaxReceiveCount
+
+  SQSQueuePolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      Queues:
+        - !Ref SQSQueue
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: DenyNonTLS
+            Effect: Deny
+            Principal: '*'
+            Action: sqs:*
+            Resource: !GetAtt SQSQueue.Arn
+            Condition:
+              Bool:
+                aws:SecureTransport: 'false'
+
+  DeadLetterQueuePolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      Queues:
+        - !Ref DeadLetterQueue
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: DenyNonTLS
+            Effect: Deny
+            Principal: '*'
+            Action: sqs:*
+            Resource: !GetAtt DeadLetterQueue.Arn
+            Condition:
+              Bool:
+                aws:SecureTransport: 'false'
+
+  TerminalQueuePolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      Queues:
+        - !Ref TerminalQueue
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: DenyNonTLS
+            Effect: Deny
+            Principal: '*'
+            Action: sqs:*
+            Resource: !GetAtt TerminalQueue.Arn
+            Condition:
+              Bool:
+                aws:SecureTransport: 'false'
 
   BackupLambdaSQSTrigger:
     Type: AWS::Lambda::EventSourceMapping
