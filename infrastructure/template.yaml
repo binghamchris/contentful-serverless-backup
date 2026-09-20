@@ -174,7 +174,7 @@ Resources:
       # EphemeralStorageSize interim; measured down at commissioning. Above
       # 512 MB bills at fractions of a cent per invocation.
       EphemeralStorageSize: 2048
-      Runtime: nodejs20.x
+      Runtime: nodejs24.x
       Handler: index.handler
       LoggingConfig:
         LogFormat: JSON
@@ -255,7 +255,7 @@ Resources:
     Properties:
       Architectures:
         - arm64
-      Runtime: nodejs20.x
+      Runtime: nodejs24.x
       Handler: index.handler
       LoggingConfig:
         LogFormat: JSON
@@ -419,7 +419,7 @@ Resources:
     Properties:
       Architectures:
         - arm64
-      Runtime: nodejs20.x
+      Runtime: nodejs24.x
       Handler: index.handler
       LoggingConfig:
         LogFormat: JSON
