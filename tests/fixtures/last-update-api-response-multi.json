@@ -1,0 +1,9 @@
+[
+  { "table": "dataLicenseTypes", "lastUpdatedAt": "2023-11-23T15:41:45Z" },
+  { "table": "obstacles", "lastUpdatedAt": "2026-04-11T19:46:41Z" },
+  { "table": "paddleCraftTypes", "lastUpdatedAt": "2026-07-02T18:27:54Z" },
+  { "table": "protectedAreas", "lastUpdatedAt": "2026-04-04T08:49:41Z" },
+  { "table": "spots", "lastUpdatedAt": "2026-09-19T16:36:00Z" },
+  { "table": "waterwayEventNotices", "lastUpdatedAt": "2026-09-14T11:23:24Z" },
+  { "table": "waterways", "lastUpdatedAt": "2026-04-02T16:04:01Z" }
+]

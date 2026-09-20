@@ -77,20 +77,30 @@ async function fetchLatestTimestamp(url, deadlineAt) {
       clearTimeout(timer);
       if (!res.ok) continue;
       const json = await res.json();
-      if (!json || typeof json !== 'object' || Array.isArray(json)) return null;
-      // Max across every table's lastUpdatedAt; ignore unparseable entries.
-      let maxEpoch = null;
-      for (const value of Object.values(json)) {
-        const e = toEpoch(value && value.lastUpdatedAt);
-        if (e !== null && (maxEpoch === null || e > maxEpoch)) maxEpoch = e;
-      }
-      return maxEpoch; // may be null if no usable timestamp — fail open
+      return maxTimestampFrom(json); // null if no usable timestamp — fail open
     } catch {
       clearTimeout(timer);
       // fall through to retry / return null
     }
   }
   return null;
+}
+
+// Pure: extract the maximum lastUpdatedAt epoch from a Last_Update_API payload.
+// Handles BOTH shapes seen in production and in the original design:
+//   - an ARRAY of { table, lastUpdatedAt } objects (both prod endpoints), and
+//   - an OBJECT keyed by table name whose values carry lastUpdatedAt.
+// Any entry without a usable timestamp is ignored; returns null (fail open)
+// when the payload is unusable or carries no parseable timestamp at all.
+function maxTimestampFrom(json) {
+  if (!json || typeof json !== 'object') return null;
+  const entries = Array.isArray(json) ? json : Object.values(json);
+  let maxEpoch = null;
+  for (const entry of entries) {
+    const e = toEpoch(entry && entry.lastUpdatedAt);
+    if (e !== null && (maxEpoch === null || e > maxEpoch)) maxEpoch = e;
+  }
+  return maxEpoch;
 }
 
 // Sanitise a build's app URL to its Amplify branch (leftmost DNS label).
@@ -272,6 +282,7 @@ exports.handler = async (event) => {
 
 // Named exports for testability.
 exports.fetchLatestTimestamp = fetchLatestTimestamp;
+exports.maxTimestampFrom = maxTimestampFrom;
 exports.branchFromUrl = branchFromUrl;
 exports.listArchiveOutcome = listArchiveOutcome;
 exports.STATUS_RE = STATUS_RE;
