@@ -32,6 +32,35 @@ original review had to correct. It is the companion to `requirements.md` and
   definition; the `uploadFile` test enshrined the removed HTTP-200 anti-pattern;
   a generator deliberately excluded the very prototype keys that would expose a
   bug. All replaced with behavioural tests.
+- **Asset reconciliation was locale-hardcoded to `en-US`.** The size-completeness
+  check (Requirement 15) read `file['en-US']`, but the production space uses
+  `en-GB`, so the lookup fell through and EVERY asset was skipped — the check was
+  a silent no-op on that space, and a truncated or missing asset would have
+  passed undetected. Found while investigating an unexpected archive-size change
+  (below). Fixed to iterate every locale's file entry; regression tests added.
+
+## Findings from the production commissioning run
+
+Only discoverable against the real account and the real Contentful space — the
+argument for front-loading the commissioning deploy:
+
+- **Six bugs the unit suite could not catch**, each fixed and committed: the flat
+  `EphemeralStorageSize` (CloudFormation execute-time validation), a `toEpoch`
+  throw on a non-primitive value (fast-check), the deploy credential-guard
+  false-positive on a vendored SDK file, the bucket policy denying the function's
+  own upload, and the en-GB reconciliation no-op.
+- **Measured memory was 378 MB, not the assumed ~950 MB** — the streaming
+  redesign removed the old buffer-everything memory. Finals: 768 MB / 1024 MB.
+- **Archive-size "growth" was not a defect.** An identical-content backup grew
+  67 MB → 87.6 MB. The archive is ~96% already-compressed binary
+  (PDF/JPEG/GIF/PNG); only the ~2.3 MB JSON is compressible (already ~9×). The
+  older, smaller zip held *larger, more-compressible superseded* versions of the
+  same assets; the API's declared `details.size` matches the new archive exactly,
+  so the new backup is the faithful one. Measured ceiling: `zip -9` saves 0.2%,
+  `zstd -19` ~4.7% (~4 MB) — fractions of a cent/month in DEEP_ARCHIVE.
+  **Compression left as-is (deflate level 9).** The real storage lever is a
+  faster DEEP_ARCHIVE transition or cross-backup asset dedup (future project),
+  not the compressor.
 
 ## Key decisions
 

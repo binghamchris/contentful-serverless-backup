@@ -25,7 +25,10 @@ describe('ARCHIVE_KEY: anchored, excludes partial and staging keys', () => {
   it('matches a final key and rejects partial/staging/other', () => {
     assert.match('2026/09/20/2026-09-20_04-52-00.336Z.zip', ARCHIVE_KEY);
     assert.doesNotMatch('2026/09/20/2026-09-20_04-52-00.336Z.partial.zip', ARCHIVE_KEY);
-    assert.doesNotMatch('staging/2026/09/20/2026-09-20_04-52-00.336Z.zip'.replace(/\.zip$/, '.tmp'), ARCHIVE_KEY);
+    // A staging key ends with the SAME .336Z.zip tail — it must be excluded by
+    // the leading ^\d{4} anchor, not by the tail. (Regression: an end-anchored
+    // pattern let this leak in and read as a covering archive.)
+    assert.doesNotMatch('staging/2026/09/20/2026-09-20_04-52-00.336Z.zip', ARCHIVE_KEY);
     assert.doesNotMatch('notes.txt', ARCHIVE_KEY);
   });
 });
@@ -80,6 +83,38 @@ describe('Enqueue table (design.md)', () => {
   it('status not captured -> no enqueue', () => {
     const r = decide({ ...base, statusCaptured: false, contentTs: iso(content), archiveOutcome: { kind: 'none' } });
     assert.equal(r.enqueue, false);
+  });
+});
+
+describe('Boundary conditions (kill off-by-one mutants)', () => {
+  const skew = base.skewMs;
+  const content = base.now - 60 * MIN; // past grace
+
+  it('archive exactly at (content - skew): NOT enqueued, and covered', () => {
+    // enqueue uses archiveEpoch < content - skew; at equality it must be false.
+    const r = decide({ ...base, contentTs: iso(content), archiveOutcome: { kind: 'found', at: content - skew } });
+    assert.equal(r.enqueue, false, 'archive exactly at the skew boundary is NOT stale -> no enqueue');
+    // coverage uses archiveEpoch >= content - skew; at equality it must be covered.
+    assert.equal(r.coverage.notify, false, 'archive exactly at the skew boundary counts as covering');
+  });
+
+  it('archive one ms BELOW (content - skew): enqueued and a gap', () => {
+    const r = decide({ ...base, contentTs: iso(content), archiveOutcome: { kind: 'found', at: content - skew - 1 } });
+    assert.equal(r.enqueue, true, 'just past the boundary is stale -> enqueue');
+    assert.equal(r.coverage.notify, true, 'just past the boundary is a gap');
+  });
+
+  it('content exactly at the grace boundary: NOT yet notified', () => {
+    // graceElapsed uses now - content > grace; at exact equality it must be false.
+    const atBoundary = base.now - base.graceMs; // now - content === grace
+    const r = decide({ ...base, contentTs: iso(atBoundary), archiveOutcome: { kind: 'none' } });
+    assert.equal(r.coverage.notify, false, 'at exactly one grace period, do not notify yet');
+  });
+
+  it('content one ms past the grace boundary: notified', () => {
+    const pastBoundary = base.now - base.graceMs - 1;
+    const r = decide({ ...base, contentTs: iso(pastBoundary), archiveOutcome: { kind: 'none' } });
+    assert.equal(r.coverage.notify, true, 'one ms past grace -> notify');
   });
 });
 

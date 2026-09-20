@@ -144,7 +144,7 @@ Tasks 1–7 are template and test-harness work that requires **no dependency cha
   - _Requirements: 28.1–28.7, 33.1–33.6, 44.3, 53.1–53.6_
   - _Verify: a doc test asserting the documented parameter list matches the template exactly, and that no doc references the former template location._
 
-- [ ] **20. Documentation, decision record, changelog, contract fixtures, efficacy.**
+- [x] **20. Documentation, decision record, changelog, contract fixtures, efficacy.**
   - Root and per-function READMEs corrected (structure, architecture including both new paths, the notification philosophy, the Last_Update_API contract, the S3 key format and archive layout); the Notifier README; the decision record capturing every deferral and the corrected-claims list; changelog; `.editorconfig`; `.gitignore` fixes (stale `/test`, `.kiro` tracking, `.env.example` negation).
   - Commit the four contract fixtures (Amplify notification, SQS FIFO record, Last_Update_API response, S3 listing, and the async invocation record); add coverage measurement (`node --test --experimental-test-coverage`) and a one-time mutation pass recorded under `docs/`.
   - _Requirements: 50.1–50.11, 51.1–51.6, 52.1–52.4, 54.1–54.12, 55.5, 56.1–56.7, 57.x_
