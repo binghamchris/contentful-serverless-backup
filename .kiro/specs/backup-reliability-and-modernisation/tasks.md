@@ -112,7 +112,7 @@ Tasks 1–7 are template and test-harness work that requires **no dependency cha
 
 ## Phase 4 — Commission, then finalise
 
-- [ ] **14. First deployment and the one-time commissioning export.**
+- [x] **14. First deployment and the one-time commissioning export.**
   - Deploy the stack with `EventSourceMappingEnabled: false` and interim `MemorySize`/`EphemeralStorageSize` (**1536**/2048 — 1536, not 1024, because the largest current backup already consumes ~950 MB and 1024 would OOM on the first run). Confirm the email subscription; run the KMS smoke-test publication **from each of the three roles**; enable the mappings.
   - Run the single commissioning export through the queue. Record under `docs/`: the size/duration envelope **with actual peak memory and duration flagged against ~70% of Lambda's 10240 MB / 900 s ceilings**, each site's build duration, the largest `maxAllowedLimit` that succeeds (one adaptive run), and whether tags survive the published-state switch. Assert the function runs on arm64.
   - _Requirements: 0.7, 10.1–10.10, 16.11, 16.12, 34.8_
