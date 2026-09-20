@@ -1,0 +1,10 @@
+{
+  "IsTruncated": false,
+  "KeyCount": 4,
+  "Contents": [
+    { "Key": "2026/09/19/2026-09-19_03-00-00.100Z.zip", "Size": 104857, "LastModified": "2026-09-19T03:00:05.000Z" },
+    { "Key": "2026/09/20/2026-09-20_04-51-00.336Z.zip", "Size": 108932, "LastModified": "2026-09-20T04:51:09.000Z" },
+    { "Key": "staging/2026/09/20/2026-09-20_04-51-00.336Z.zip", "Size": 108932, "LastModified": "2026-09-20T04:51:03.000Z" },
+    { "Key": "manifest.json", "Size": 412, "LastModified": "2026-09-20T04:51:02.000Z" }
+  ]
+}

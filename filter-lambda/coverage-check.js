@@ -15,9 +15,11 @@
 //
 // Requirements: 30.x, 31.x, 32.x, 33.x, 34.x, 9.16.
 
-// Anchored archive-key pattern: a final key ends .<ms>Z.zip. This excludes
-// .partial.zip and any staging/<...> key. MUST NOT be relaxed to unanchored.
-const ARCHIVE_KEY = /\.\d{3}Z\.zip$/;
+// Anchored archive-key pattern. Anchored at BOTH ends against the whole key:
+// a final key is YYYY/MM/DD/...<ms>Z.zip. The leading ^\d{4} anchor excludes
+// any "staging/..." key, and the .<ms>Z.zip tail excludes ".partial.zip".
+// MUST NOT be relaxed; a unit test asserts both exclusions.
+const ARCHIVE_KEY = /^\d{4}\/\d{2}\/\d{2}\/[^/]*\.\d{3}Z\.zip$/;
 
 // Parse an ISO timestamp to epoch ms, or null if unusable.
 function toEpoch(value) {
