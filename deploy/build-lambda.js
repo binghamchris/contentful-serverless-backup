@@ -22,7 +22,9 @@ require('dotenv').config();
 const fs = require('fs');
 const path = require('path');
 const { execFileSync } = require('child_process');
-const archiver = require('archiver');
+// archiver 8 is ESM-only and exports CLASSES, not a callable default (Node 24
+// require(esm) interop supplies the namespace here).
+const { ZipArchive } = require('archiver');
 const { fromIni } = require('@aws-sdk/credential-providers');
 const {
   LambdaClient, UpdateFunctionCodeCommand, TagResourceCommand,
@@ -109,7 +111,7 @@ async function zipDirectory(lambdaDir, zipPath) {
   const files = collectAllowedFiles(lambdaDir);
   await new Promise((resolve, reject) => {
     const output = fs.createWriteStream(zipPath);
-    const archive = archiver('zip', { zlib: { level: 9 } });
+    const archive = new ZipArchive({ zlib: { level: 9 } });
     output.on('close', resolve);
     archive.on('error', reject);
     archive.pipe(output);

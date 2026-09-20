@@ -89,7 +89,7 @@ describe('fetchLatestTimestamp: fail open on any unusable response', () => {
           fc.constant(null),                                // null body
           fc.constant('a string'),                          // non-object
           fc.object(),                                      // arbitrary object
-          fc.record({ t: fc.record({ lastUpdatedAt: fc.date().map((d) => d.toISOString()) }) })
+          fc.record({ t: fc.record({ lastUpdatedAt: fc.date({ noInvalidDate: true }).map((d) => d.toISOString()) }) })
         ),
         async (bodyVal) => {
           globalThis.fetch = async () => ({ ok: true, json: async () => bodyVal });

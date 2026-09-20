@@ -10,7 +10,7 @@ const originalResolve = Module._resolveFilename;
 let publishCount = 0;
 const stubs = {
   'contentful-export': () => {},
-  archiver: () => ({ on() { return this; }, pipe() { return this; }, directory() { return this; }, finalize() { return Promise.resolve(); } }),
+  archiver: { ZipArchive: class { on() { return this; } pipe() { return this; } directory() { return this; } file() { return this; } finalize() { return Promise.resolve(); } } },
   '@aws-sdk/client-s3': { S3Client: class {}, CopyObjectCommand: class {}, ListObjectsV2Command: class {} },
   '@aws-sdk/lib-storage': { Upload: class { done() { return Promise.resolve({}); } } },
   '@aws-sdk/client-ssm': { SSMClient: class {}, GetParametersCommand: class {} },

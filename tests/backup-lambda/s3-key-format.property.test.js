@@ -7,7 +7,7 @@ const Module = require('node:module');
 const originalResolve = Module._resolveFilename;
 const stubs = {
   'contentful-export': () => {},
-  archiver: () => ({ on() { return this; }, pipe() { return this; }, directory() { return this; }, finalize() { return Promise.resolve(); } }),
+  archiver: { ZipArchive: class { on() { return this; } pipe() { return this; } directory() { return this; } file() { return this; } finalize() { return Promise.resolve(); } } },
   '@aws-sdk/client-s3': { S3Client: class {}, CopyObjectCommand: class {}, ListObjectsV2Command: class {} },
   '@aws-sdk/lib-storage': { Upload: class { done() { return Promise.resolve({}); } } },
   '@aws-sdk/client-ssm': { SSMClient: class {}, GetParametersCommand: class {} },
@@ -32,7 +32,7 @@ describe('Property 3: S3 object key format is deterministic and correct', () => 
   it('should produce s3Path matching YYYY/MM/DD from UTC date values', () => {
     fc.assert(
       fc.property(
-        fc.date({ min: new Date('2000-01-01'), max: new Date('2099-12-31') }),
+        fc.date({ min: new Date('2000-01-01'), max: new Date('2099-12-31'), noInvalidDate: true }),
         (date) => {
           const { s3Path } = generateS3Key(date);
           const expectedPath = `${date.getUTCFullYear()}/${pad(date.getUTCMonth() + 1)}/${pad(date.getUTCDate())}`;
@@ -46,7 +46,7 @@ describe('Property 3: S3 object key format is deterministic and correct', () => 
   it('should produce zipFilename matching YYYY-MM-DD_HH-mm-ss.sssZ.zip', () => {
     fc.assert(
       fc.property(
-        fc.date({ min: new Date('2000-01-01'), max: new Date('2099-12-31') }),
+        fc.date({ min: new Date('2000-01-01'), max: new Date('2099-12-31'), noInvalidDate: true }),
         (date) => {
           const { zipFilename } = generateS3Key(date);
           const y = date.getUTCFullYear();
@@ -67,7 +67,7 @@ describe('Property 3: S3 object key format is deterministic and correct', () => 
   it('should be deterministic: same date always produces same output', () => {
     fc.assert(
       fc.property(
-        fc.date({ min: new Date('2000-01-01'), max: new Date('2099-12-31') }),
+        fc.date({ min: new Date('2000-01-01'), max: new Date('2099-12-31'), noInvalidDate: true }),
         (date) => {
           const result1 = generateS3Key(date);
           const result2 = generateS3Key(date);
@@ -81,7 +81,7 @@ describe('Property 3: S3 object key format is deterministic and correct', () => 
   it('should produce datePrefix matching YYYY-MM-DD', () => {
     fc.assert(
       fc.property(
-        fc.date({ min: new Date('2000-01-01'), max: new Date('2099-12-31') }),
+        fc.date({ min: new Date('2000-01-01'), max: new Date('2099-12-31'), noInvalidDate: true }),
         (date) => {
           const { datePrefix } = generateS3Key(date);
           const expected = `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())}`;

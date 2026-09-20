@@ -29,7 +29,10 @@ const fs = require('fs');
 const path = require('path');
 const { PassThrough } = require('stream');
 const contentfulExport = require('contentful-export');
-const archiver = require('archiver');
+// archiver 8 is ESM-only and exports CLASSES, not a callable default. Node 24's
+// require(esm) interop gives us the namespace from CommonJS; ZipArchive extends
+// Archiver, so every instance method used below is unchanged from 7.x.
+const { ZipArchive } = require('archiver');
 const { S3Client, CopyObjectCommand, ListObjectsV2Command } = require('@aws-sdk/client-s3');
 const { Upload } = require('@aws-sdk/lib-storage');
 const { SSMClient, GetParametersCommand } = require('@aws-sdk/client-ssm');
@@ -87,7 +90,7 @@ const streamArchiveToS3 = async (inputFolder, bucket, key, storageClass) => {
   let bytes = 0;
   pass.on('data', (chunk) => { bytes += chunk.length; });
 
-  const archive = archiver('zip', { zlib: { level: 9 } });
+  const archive = new ZipArchive({ zlib: { level: 9 } });
   const upload = new Upload({
     client: s3Client,
     params: { Bucket: bucket, Key: key, Body: pass, StorageClass: storageClass },
