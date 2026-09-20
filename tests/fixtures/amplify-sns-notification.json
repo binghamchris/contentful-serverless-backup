@@ -1,15 +1,16 @@
 {
+  "_comment": "Synthetic Amplify build-notification SNS envelope. Preserves the EXACT real message structure (prose body, app URL then console URL, 'Your build status is SUCCEED') but every identifier is fake — no real app id, account number, ARN, or email. Do not replace with a real notification.",
   "Records": [
     {
       "EventSource": "aws:sns",
       "EventVersion": "1.0",
       "Sns": {
         "Type": "Notification",
-        "MessageId": "cccccccc-dddd-eeee-ffff-000000000000",
-        "TopicArn": "arn:aws:sns:eu-central-1:123456789012:amplify-main-branch-notifications",
-        "Subject": "Build notification from AWS Amplify Console for app: main",
-        "Message": "{\"jobId\":\"42\",\"appId\":\"d123abc\",\"region\":\"eu-central-1\",\"branch\":\"main\",\"jobStatus\":\"SUCCEED\",\"appUrl\":\"https://main.d123abc.amplifyapp.com\"}",
-        "Timestamp": "2026-09-20T04:50:00.000Z"
+        "MessageId": "00000000-0000-0000-0000-000000000000",
+        "TopicArn": "arn:aws:sns:eu-central-1:111111111111:amplify-exampleappid00_main",
+        "Subject": "AWS Amplify Build Notification",
+        "Message": "Build notification from the AWS Amplify Console for app: https://main.exampleappid00.amplifyapp.com/. Your build status is SUCCEED. Go to https://console.aws.amazon.com/amplify/apps/exampleappid00/branches/main?region=eu-central-1 to view details on your build. ",
+        "Timestamp": "2026-09-20T07:55:00.000Z"
       }
     }
   ]

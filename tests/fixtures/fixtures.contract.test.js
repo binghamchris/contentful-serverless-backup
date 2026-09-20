@@ -16,9 +16,11 @@ const fixture = (name) => JSON.parse(
 describe('Contract fixtures', () => {
   it('amplify-sns-notification: an SNS record with a parseable success body', () => {
     const f = fixture('amplify-sns-notification.json');
-    const msg = JSON.parse(f.Records[0].Sns.Message);
-    assert.equal(msg.jobStatus, 'SUCCEED');
-    assert.ok(msg.appUrl.startsWith('https://main.'));
+    // The real Amplify notification body is PROSE, not JSON.
+    const msg = f.Records[0].Sns.Message;
+    assert.equal(typeof msg, 'string');
+    assert.match(msg, /build status is SUCCEED/i);
+    assert.match(msg, /https:\/\/main\.[a-z0-9]+\.amplifyapp\.com/i);
   });
 
   it('sqs-fifo-record: a Backup input with ApproximateReceiveCount', () => {

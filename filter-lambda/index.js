@@ -47,8 +47,11 @@ const s3Client = new S3Client(AWS_CFG);
 const ssmClient = new SSMClient(AWS_CFG);
 const snsClient = new SNSClient(AWS_CFG);
 
-// Anchored: captures a build status token. Fail open on no match.
-const STATUS_RE = /"?jobStatus"?\s*[:=]\s*"?(SUCCEED|FAILED|CANCELLED|STARTED)\b/i;
+// Captures a build status token. Matches BOTH the real Amplify email-style
+// prose ("Your build status is SUCCEED.") and a jobStatus JSON form, anchored
+// on the "status" wording so it can't match the word appearing loosely
+// elsewhere. Fail open on no match.
+const STATUS_RE = /(?:build\s+status\s+is|"?jobStatus"?\s*[:=])\s*"?(SUCCEED|FAILED|CANCELLED|STARTED)\b/i;
 
 const DEFAULTS = {
   graceMs: 30 * 60 * 1000,     // 30 min
@@ -114,6 +117,28 @@ function branchFromUrl(rawUrl) {
   } catch {
     return null;
   }
+}
+
+// Extract the Amplify branch from a build-notification message body. The real
+// notification is PROSE containing two URLs — the app URL
+// (https://<branch>.<appid>.amplifyapp.com/) and a console URL
+// (https://console.aws.amazon.com/amplify/apps/<appid>/branches/<branch>...).
+// A naive "first URL" grab is fragile (it would pick up `console` if the URLs
+// were ordered differently), so this is specific:
+//   1) the leftmost label of the *.amplifyapp.com host, else
+//   2) the `/branches/<name>` segment of the console URL.
+function branchFromAmplifyMessage(body) {
+  if (!body || typeof body !== 'string') return null;
+  // 1) app URL host: <branch>.<appid>.amplifyapp.com
+  const appHost = body.match(/https?:\/\/([a-z0-9-]+)\.[a-z0-9-]+\.amplifyapp\.com/i);
+  if (appHost) return appHost[1].toLowerCase().replace(/[^a-z0-9-]/g, '-');
+  // 2) console URL: .../branches/<branch>
+  const consolePath = body.match(/\/branches\/([^/?#\s]+)/i);
+  if (consolePath) {
+    try { return decodeURIComponent(consolePath[1]).toLowerCase().replace(/[^a-z0-9-]/g, '-'); }
+    catch { return consolePath[1].toLowerCase().replace(/[^a-z0-9-]/g, '-'); }
+  }
+  return null;
 }
 
 // List the bucket, returning found(at)|none|indeterminate from the archive keys.
@@ -199,16 +224,19 @@ exports.handler = async (event) => {
   const statusMatch = STATUS_RE.exec(body);
   const statusCaptured = !!statusMatch && statusMatch[1].toUpperCase() === 'SUCCEED';
 
-  // Branch: leftmost sanitised DNS label of the app URL vs TargetBranch.
-  let appUrl = null;
+  // Branch: prefer a structured appUrl if the body is JSON; otherwise derive
+  // it from the prose message (the real Amplify email form) — specifically from
+  // the amplifyapp.com host or the console /branches/ path, NOT a naive
+  // first-URL grab (which could pick up the console host).
+  let branch = null;
   try {
     const parsed = JSON.parse(body);
-    appUrl = parsed && (parsed.appUrl || parsed.url || (parsed.detail && parsed.detail.appUrl));
+    const appUrl = parsed && (parsed.appUrl || parsed.url || (parsed.detail && parsed.detail.appUrl));
+    branch = branchFromUrl(appUrl);
   } catch {
-    const m = body.match(/https?:\/\/[^\s"']+/);
-    appUrl = m ? m[0] : null;
+    // body is prose, not JSON — handled below
   }
-  const branch = branchFromUrl(appUrl);
+  if (!branch) branch = branchFromAmplifyMessage(body);
   const targetBranch = (process.env.TARGET_BRANCH || '').toLowerCase();
   // If no target configured, treat every branch as matching (opt-in narrowing).
   const branchMatches = !targetBranch || (branch !== null && branch === targetBranch);
@@ -284,5 +312,6 @@ exports.handler = async (event) => {
 exports.fetchLatestTimestamp = fetchLatestTimestamp;
 exports.maxTimestampFrom = maxTimestampFrom;
 exports.branchFromUrl = branchFromUrl;
+exports.branchFromAmplifyMessage = branchFromAmplifyMessage;
 exports.listArchiveOutcome = listArchiveOutcome;
 exports.STATUS_RE = STATUS_RE;
