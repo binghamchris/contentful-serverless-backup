@@ -89,20 +89,20 @@ Tasks 1–7 are template and test-harness work that requires **no dependency cha
   - _Requirements: 9.1–9.21, 40.6_
   - _Verify: Requirement 47's tests (all three outcomes, quiet-space silence, empty-bucket notify, enqueue-within-grace vs older-than-grace, unparseable key); the criterion 49.5 property test over full timestamp ordering._
 
-- [ ] **11. Notifier_Lambda: real code, both envelope shapes, content contract.**
+- [x] **11. Notifier_Lambda: real code, both envelope shapes, content contract.**
   - Discriminate the SQS-batch shape (DLQ) from the async-invocation-record shape (Filter `OnFailure`); log the full failed body; publish a formatted notification with the content contract (failing phase where knowable, UTC timestamp, space/environment, error, and a Logs Insights query over the correlating `messageId` — avoiding the IA-unsupported commands); never call Contentful, never trigger a backup; validate its envelope without leaving a failure unreported.
   - Have the Backup_Lambda log `messageId` and phase as structured fields so the query has a field to filter on.
   - _Requirements: 7.4–7.14, 8.1–8.8, 17.1–17.6_
   - _Verify: tests driving both envelope shapes from committed fixtures; a test that a Notifier failure moves to the terminal queue rather than blocking._
 
-- [ ] **12. Backup_Lambda: working directory, export config, asset reconciliation.**
+- [x] **12. Backup_Lambda: working directory, export config, asset reconciliation.**
   - Per-invocation working dir with an injectable root; sweep-on-entry; archive written outside the archived tree.
   - Remove `includeDrafts` (both tokens supplied, fail-fast on either missing); `includeExperienceOrchestration: false`; `useVerboseRenderer: true`; `maxAllowedLimit` a parameter (default 200, ceiling 1000) with adaptive halving to 50 on a response-size error; validate tokens before the export.
   - Asset reconciliation by **size against `details.size`** (not existence); rate-limit shortfall notifies without throwing and records `complete: false`, any other shortfall throws; manifest with the fixed content-file name and per-entity counts.
   - _Requirements: 12.1–12.8, 13.1–13.7, 14.1–14.11, 15.1–15.8, 16.3, 17.x_
   - _Verify: the twice-against-one-scratch-dir test (exactly one export in the second archive); a fixture export tree with a missing and a wrong-size asset._
 
-- [ ] **13. Backup_Lambda: streamed staging upload, verify, promote.**
+- [x] **13. Backup_Lambda: streamed staging upload, verify, promote.**
   - Stream `archiver` → `lib-storage` `Upload` → staging prefix; drop the export result before archiving; in-invocation upload retry re-creating the stream; verify the staged object by `ListObjectsV2` on the exact key (present, size); `CopyObject` to the final key; leave staged objects to a short-TTL lifecycle rule.
   - Grant `s3:PutObject`, `s3:AbortMultipartUpload`, `s3:ListBucket`, `s3:GetObject` on the **staging prefix only**; no `GetObject` on the archive prefix.
   - _Requirements: 13.4, 13.5, 16.1–16.9_
