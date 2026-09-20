@@ -54,7 +54,7 @@ Tasks 1–7 are template and test-harness work that requires **no dependency cha
   - _Requirements: 2.1–2.5, 22.1–22.7_
   - _Verify: a test asserting the three SQS actions are present and scoped to the source queue; envelope-validation tests per function._
 
-- [ ] **7. Repair the vacuous tests and widen the generators.**
+- [x] **7. Repair the vacuous tests and widen the generators.**
   - Replace the four source-text-grep assertions in `tests/deploy/build-script.unit.test.js` and the completed-migration assertions with behavioural tests; repair the shadowed-poison prototype test; replace the tautological response-shape test; use or remove the dead `collectStrings`.
   - Widen the date/dictionary generators to include invalid dates, empty objects, absent fields, nulls and non-objects; make oracles assert `Number.isFinite`; correct `getConfig` to an own-property check and stop excluding inherited names; restore `globalThis.fetch` in teardown.
   - _Requirements: 45.1–45.5, 48.1–48.6, 49.1–49.6_
@@ -75,14 +75,14 @@ Tasks 1–7 are template and test-harness work that requires **no dependency cha
 
 ## Phase 3 — Code mechanisms
 
-- [ ] **9. Filter_Lambda: fail open, robust HTTP, two endpoints, structured status/branch.**
+- [x] **9. Filter_Lambda: fail open, robust HTTP, two endpoints, structured status/branch.**
   - Fail open on any unusable last-update response (empty object, missing `lastUpdatedAt`, unparseable date, non-object, error envelope, absent/non-numeric window); collect all valid timestamps and take the **max across both** `LastUpdateUrl` parameters; no truthiness test for an established timestamp; stale-payload guard (payload older than the notifying build → stale, fail open).
   - Explicit `connectionTimeout`/`requestTimeout`/`maxAttempts: 2` on all AWS clients; `AbortSignal` timeout + status check + shape validation + bounded retries on the fetch; an overall handler deadline that **returns** (fail open, no email) on exhaustion.
   - Anchored regex with a capture group for build status (fail open on no match); branch from the sanitised leftmost DNS label against a `TargetBranch` parameter (no enqueue on mismatch; Coverage_Check still runs); `MessageDeduplicationId` derived from content state, constant `MessageGroupId`.
   - _Requirements: 18.1–18.11, 19.1–19.6, 20.1–20.7, 21.1–21.10, 22.x_
   - _Verify: tests for every unusable response; anchored-regex against the committed Amplify fixture; a slow-endpoint test asserting fail-open-by-return, not timeout._
 
-- [ ] **10. The Coverage_Check as a pure function, plus the SSM suppression store.**
+- [x] **10. The Coverage_Check as a pure function, plus the SSM suppression store.**
   - Implement the comparison as a pure function returning both the enqueue and the coverage decisions, taking `(contentTs, archiveOutcome, now, grace, skew, statusCaptured, branchMatches, storeState)`. Three outcomes; `Number.isFinite` guard; minimum-size filter; skew applied identically to enqueue and coverage.
   - Add `SuppressionParameter` (SSM standard); grace-bounded stateful suppression (`{notifiedContentChange, notifiedAt, enqueuedContentChange, enqueuedAt}`); record enqueue on enqueue; swallow a post-publish `PutParameter` failure; treat an initial/unparseable value as "no suppression".
   - Grant the Filter `s3:ListBucket` (not `ListBucketVersions`), `ssm:GetParameter`/`PutParameter` on the one ARN, `sns:Publish` + `kms:ViaService`-scoped KMS, `lambda:InvokeFunction` on the Notifier.
