@@ -7,7 +7,7 @@ const Module = require('node:module');
 const originalResolve = Module._resolveFilename;
 const stubs = {
   'contentful-export': () => {},
-  archiver: () => ({ on() { return this; }, pipe() { return this; }, directory() { return this; }, finalize() { return Promise.resolve(); } }),
+  archiver: { ZipArchive: class { on() { return this; } pipe() { return this; } directory() { return this; } file() { return this; } finalize() { return Promise.resolve(); } } },
   '@aws-sdk/client-s3': { S3Client: class {}, CopyObjectCommand: class {}, ListObjectsV2Command: class {} },
   '@aws-sdk/lib-storage': { Upload: class { done() { return Promise.resolve({}); } } },
   '@aws-sdk/client-ssm': { SSMClient: class {}, GetParametersCommand: class {} },
@@ -34,7 +34,7 @@ describe('Property: generated final key matches the coverage archive pattern', (
   it('ends .<ms>Z.zip for any valid timestamp', () => {
     fc.assert(
       fc.property(
-        fc.date({ min: new Date('2000-01-01T00:00:00.000Z'), max: new Date('2100-01-01T00:00:00.000Z') }),
+        fc.date({ min: new Date('2000-01-01T00:00:00.000Z'), max: new Date('2100-01-01T00:00:00.000Z'), noInvalidDate: true }),
         (date) => {
           const { zipFilename, s3Path } = generateS3Key(date);
           assert.match(zipFilename, ARCHIVE_KEY, `filename ${zipFilename} must match the archive pattern`);

@@ -159,7 +159,7 @@ describe('Coverage-email conditions (design.md)', () => {
 describe('Property: decide never throws and always returns finite-guarded booleans', () => {
   it('for arbitrary content ts, outcomes and store states', () => {
     const dateish = fc.oneof(
-      fc.date().map((d) => d.toISOString()),
+      fc.date({ noInvalidDate: true }).map((d) => d.toISOString()),
       fc.constant(null), fc.constant(undefined), fc.constant(''),
       fc.constant('not-a-date'), fc.integer(), fc.object()
     );

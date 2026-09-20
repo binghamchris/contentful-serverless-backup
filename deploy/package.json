@@ -6,11 +6,12 @@
   "engines": {
     "node": ">=24 <25"
   },
+  "//dependencyNotes": "All dependencies are on their LATEST versions. archiver 8 is ESM-only, so build-lambda.js loads it with `const { ZipArchive } = await import('archiver')` inside the async zipDirectory — NOT require(), which throws ERR_REQUIRE_ESM wherever require(esm) interop is off. See backup-lambda/package.json for the full note and the false-green warning. dotenv is on 18.x, verified to still load deploy/.env.",
   "dependencies": {
     "@aws-sdk/client-cloudformation": "3.1136.0",
     "@aws-sdk/client-lambda": "3.1136.0",
     "@aws-sdk/credential-providers": "3.1136.0",
-    "archiver": "7.0.1",
-    "dotenv": "16.4.5"
+    "archiver": "8.0.0",
+    "dotenv": "18.0.1"
   }
 }

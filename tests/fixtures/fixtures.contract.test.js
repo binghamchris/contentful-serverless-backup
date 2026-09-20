@@ -16,9 +16,11 @@ const fixture = (name) => JSON.parse(
 describe('Contract fixtures', () => {
   it('amplify-sns-notification: an SNS record with a parseable success body', () => {
     const f = fixture('amplify-sns-notification.json');
-    const msg = JSON.parse(f.Records[0].Sns.Message);
-    assert.equal(msg.jobStatus, 'SUCCEED');
-    assert.ok(msg.appUrl.startsWith('https://main.'));
+    // The real Amplify notification body is PROSE, not JSON.
+    const msg = f.Records[0].Sns.Message;
+    assert.equal(typeof msg, 'string');
+    assert.match(msg, /build status is SUCCEED/i);
+    assert.match(msg, /https:\/\/main\.[a-z0-9]+\.amplifyapp\.com/i);
   });
 
   it('sqs-fifo-record: a Backup input with ApproximateReceiveCount', () => {
@@ -28,10 +30,11 @@ describe('Contract fixtures', () => {
 
   it('last-update-api-response: every lastUpdatedAt parses to a finite epoch', () => {
     const f = fixture('last-update-api-response.json');
-    const epochs = Object.values(f).map((v) => toEpoch(v.lastUpdatedAt));
+    // Real shape: an ARRAY of { table, lastUpdatedAt } objects.
+    assert.ok(Array.isArray(f), 'the Last_Update_API payload is a JSON array');
+    const epochs = f.map((v) => toEpoch(v.lastUpdatedAt));
     assert.ok(epochs.every((e) => Number.isFinite(e)));
-    // The max is the posts timestamp.
-    assert.equal(Math.max(...epochs), toEpoch('2026-09-20T04:50:03.000Z'));
+    assert.equal(Math.max(...epochs), toEpoch('2026-09-20T07:55:23+00:00'));
   });
 
   it('s3-listing: ARCHIVE_KEY matches exactly the two conforming final keys', () => {

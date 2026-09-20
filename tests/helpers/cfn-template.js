@@ -1,34 +1,68 @@
 // Shared CloudFormation template-loading helper.
-// Extracts the js-yaml intrinsic-function schema and template parse that
+// Extracts the YAML intrinsic-function schema and template parse that
 // tests/infrastructure/*.test.js previously duplicated verbatim.
 // Validates: Requirement 45.6 (duplicated schema extracted to one module).
+//
+// PORTED TO js-yaml 5. v5 removed the `Type` constructor and
+// `DEFAULT_SCHEMA.extend()` that v4 used; custom tags are now built with
+// defineScalarTag / defineSequenceTag / defineMappingTag and composed into a
+// `Schema`. The parsed shape is deliberately IDENTICAL to the v4 output
+// (`!Sub "x"` -> { 'Fn::Sub': 'x' }, `!If [a,b]` -> { 'Fn::If': [a,b] }), and
+// tests/infrastructure/yaml-schema-equivalence.unit.test.js proves it against a
+// snapshot of the pre-migration parse.
 
 const fs = require('node:fs');
 const path = require('node:path');
-const yaml = require('js-yaml');
+const {
+  load, Schema, CORE_SCHEMA,
+  defineScalarTag, defineSequenceTag, defineMappingTag,
+} = require('js-yaml');
 
-// Custom YAML types so js-yaml can parse CloudFormation intrinsic tags.
-const cfnTags = [
+// CloudFormation short-form intrinsics. Each may appear as a scalar, a sequence
+// or a mapping, so every name is registered in all three node kinds.
+const CFN_FNS = [
   'Ref', 'Sub', 'GetAtt', 'Join', 'Select', 'Split', 'If',
   'Equals', 'And', 'Or', 'Not', 'FindInMap', 'Base64',
   'Cidr', 'ImportValue', 'GetAZs', 'Condition', 'Transform',
-].flatMap((fn) =>
-  ['scalar', 'sequence', 'mapping'].map((kind) =>
-    new yaml.Type(`!${fn}`, {
-      kind,
-      construct: (data) => ({ [`Fn::${fn}`]: data }),
-    })
-  )
-);
+];
 
-const CFN_SCHEMA = yaml.DEFAULT_SCHEMA.extend(cfnTags);
+// Load-only tags: `identify: () => false` keeps them out of dumping entirely.
+const cfnTags = CFN_FNS.flatMap((fn) => {
+  const tagName = `!${fn}`;
+  const key = `Fn::${fn}`;
+  const wrap = (data) => ({ [key]: data });
+
+  return [
+    defineScalarTag(tagName, {
+      resolve: (source) => wrap(source),
+      identify: () => false,
+    }),
+    defineSequenceTag(tagName, {
+      create: () => [],
+      addItem: (carrier, item) => { carrier.push(item); },
+      finalize: (carrier) => wrap(carrier),
+      identify: () => false,
+    }),
+    defineMappingTag(tagName, {
+      create: () => new Map(),
+      addPair: (carrier, k, v) => { carrier.set(k, v); return ''; },
+      has: (carrier, k) => carrier.has(k),
+      keys: (result) => Object.keys(result[key] || {}),
+      get: (result, k) => (result[key] || {})[k],
+      finalize: (carrier) => wrap(Object.fromEntries(carrier)),
+      identify: () => false,
+    }),
+  ];
+});
+
+const CFN_SCHEMA = new Schema([...CORE_SCHEMA.tags, ...cfnTags]);
 
 const TEMPLATE_PATH = path.join(__dirname, '../../infrastructure/template.yaml');
 
 /** Load and parse the project's CloudFormation template. */
 function loadTemplate(templatePath = TEMPLATE_PATH) {
   const content = fs.readFileSync(templatePath, 'utf8');
-  return yaml.load(content, { schema: CFN_SCHEMA });
+  return load(content, { schema: CFN_SCHEMA });
 }
 
 /**

@@ -20,14 +20,15 @@ function makeStubs() {
       capturedExportOptions = options;
       return exportBehaviour();
     },
-    archiver: () => {
-      const handlers = {};
-      return {
-        on(evt, cb) { handlers[evt] = cb; return this; },
-        pipe() { return this; },
-        directory() { return this; },
-        finalize() { return Promise.resolve(); },
-      };
+    archiver: {
+      // archiver 8 exports classes, not a callable default.
+      ZipArchive: class {
+        on() { return this; }
+        pipe() { return this; }
+        directory() { return this; }
+        file() { return this; }
+        finalize() { return Promise.resolve(); }
+      },
     },
     '@aws-sdk/client-s3': {
       S3Client: class { send(cmd) { s3Commands.push(cmd); return Promise.resolve(cmd.__list ? listBehaviour(cmd) : {}); } },
