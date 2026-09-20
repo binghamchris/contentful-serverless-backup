@@ -94,16 +94,17 @@ argument for front-loading the commissioning deploy:
   never silence. DynamoDB would give CAS at the cost of a resource this workload
   does not otherwise need; rejected.
 - **npm audit residual**: the pinned deps carry transitive `@smithy` /
-  `fast-xml-parser` advisories inside the AWS SDK (fewer *highs* than the old
-  deps). The one CRITICAL is `fast-xml-parser` (GHSA-8gc5-j5rx-235r et al.),
-  transitive in `@aws-sdk/core`; it parses only AWS API XML responses, never
-  attacker-controlled input (this app reads Contentful JSON), so it is not
-  reachable here. The fix needs a major SDK jump (3.709 → 3.1136) and full
-  re-test, not a reactive bump. **CI audit is therefore REPORT-ONLY**
-  (`continue-on-error`), not a hard merge gate — gating a merge on an
-  unfixable-today, unreachable transitive advisory is the alert-fatigue trap
-  this project exists to avoid. The weekly scheduled audit still surfaces any
-  NEW advisory for review.
+  `fast-xml-parser` advisories inside the AWS SDK. **RESOLVED.** The one CRITICAL
+  was `fast-xml-parser` (GHSA-m7jm-9gc2-mpf2, a DOCTYPE-entity regex-injection
+  encoding bypass, CVSS 9.3), transitive in `@aws-sdk/core`. It parsed only AWS
+  API XML responses, never attacker-controlled input (this app reads Contentful
+  JSON), so it was never reachable here — but it has now been cleared properly:
+  the AWS SDK was bumped `3.709 → 3.1136`, which **drops the `fast-xml-parser`
+  dependency entirely** (it no longer appears in any function's tree). All four
+  manifests audit clean (0 vulnerabilities), the pipeline was re-tested and
+  redeployed to prod, and the CI audit gate was **re-armed as a hard fail on
+  CRITICAL** (it had been temporarily report-only while the advisory was
+  unfixable). The weekly scheduled audit still surfaces any new advisory.
 - **The SSE-header bucket policy** and **the induced-failure email matrix** are
   proven at deploy time (tasks 14/16), not by unit tests.
 - Excluded by the owner: restore functionality, licence change, git branch

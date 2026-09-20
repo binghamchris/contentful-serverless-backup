@@ -40,21 +40,16 @@ jobs:
           for dir in backup-lambda filter-lambda notifier-lambda deploy; do
             (cd "$dir" && npm ci --omit=dev)
           done
-      - name: npm audit (production deps) — REPORT ONLY
-        # Reported, never a hard merge gate. The pinned AWS SDK carries a known
-        # transitive fast-xml-parser critical (GHSA-8gc5-j5rx-235r et al.) that
-        # is not reachable in this app — the SDK parses only AWS API XML, never
-        # attacker-controlled input, and we parse Contentful JSON, not XML.
-        # Fixing it needs a major SDK jump (3.709 -> 3.1136), tracked in
-        # docs/backup-reliability-and-modernisation/decision-record.md. Gating a
-        # merge on an unfixable-today transitive advisory is the alert-fatigue
-        # trap this project exists to avoid, so this step reports and does not
-        # fail the build. The weekly scheduled run surfaces any NEW advisory.
-        continue-on-error: true
+      - name: npm audit (production deps) — fail on CRITICAL
+        # Hard gate at CRITICAL. The AWS SDK was bumped to 3.1136 which drops the
+        # transitive fast-xml-parser dependency entirely, clearing the only
+        # critical the pinned deps carried (see the decision record). Moderate
+        # advisories are still reported but do not block; the weekly scheduled
+        # run surfaces any NEW critical.
         run: |
           for dir in backup-lambda filter-lambda notifier-lambda deploy; do
             echo "== audit $dir =="
-            (cd "$dir" && npm audit --omit=dev) || true
+            (cd "$dir" && npm audit --omit=dev --audit-level=critical)
           done
 
   lint-infra:
