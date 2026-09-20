@@ -21,7 +21,7 @@ function getConfig(target) {
       zipFileName: 'filter-lambda.zip',
     },
   };
-  return configs[target] || null;
+  return Object.prototype.hasOwnProperty.call(configs, target) ? configs[target] : null;
 }
 
 // Check if deployment response indicates success

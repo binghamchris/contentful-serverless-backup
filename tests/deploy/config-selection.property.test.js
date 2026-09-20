@@ -57,11 +57,6 @@ const expectedConfigs = {
   },
 };
 
-// Object.prototype property names that would be truthy when accessed via bracket notation
-// on a plain object. These are not valid Lambda identifiers but would not return null
-// due to prototype inheritance on the internal configs object.
-const prototypeKeys = new Set(Object.getOwnPropertyNames(Object.prototype));
-
 describe('Property 7: Build script config selection maps arguments to correct Lambda configuration', () => {
   it('should return correct config for valid Lambda identifiers', () => {
     fc.assert(
@@ -84,17 +79,27 @@ describe('Property 7: Build script config selection maps arguments to correct La
     );
   });
 
-  it('should return null for invalid identifiers', () => {
+  it('should return null for invalid identifiers, INCLUDING prototype-chain names', () => {
     fc.assert(
       fc.property(
-        fc.string().filter(s => s !== 'backup' && s !== 'filter' && !prototypeKeys.has(s)),
+        // Deliberately NOT excluding prototype keys: getConfig now does an
+        // own-property lookup, so "constructor"/"toString"/etc. must resolve
+        // to null. Excluding them (the previous behaviour) hid the
+        // prototype-inheritance bug this generator should catch.
+        fc.string().filter((s) => s !== 'backup' && s !== 'filter'),
         (target) => {
           const config = getConfig(target);
           assert.equal(config, null,
             `getConfig("${target}") should return null for invalid identifier`);
         }
       ),
-      { numRuns: 100 }
+      { numRuns: 200 }
     );
+  });
+
+  it('explicitly rejects every Object.prototype name', () => {
+    for (const poison of Object.getOwnPropertyNames(Object.prototype)) {
+      assert.equal(getConfig(poison), null, `getConfig("${poison}") must be null`);
+    }
   });
 });
