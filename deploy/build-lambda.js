@@ -22,9 +22,8 @@ require('dotenv').config();
 const fs = require('fs');
 const path = require('path');
 const { execFileSync } = require('child_process');
-// archiver 8 is ESM-only and exports CLASSES, not a callable default (Node 24
-// require(esm) interop supplies the namespace here).
-const { ZipArchive } = require('archiver');
+// archiver 8 is ESM-only; loaded via dynamic import() inside zipDirectory so
+// this CommonJS script does not depend on require(esm) interop being enabled.
 const { fromIni } = require('@aws-sdk/credential-providers');
 const {
   LambdaClient, UpdateFunctionCodeCommand, TagResourceCommand,
@@ -108,6 +107,7 @@ async function zipDirectory(lambdaDir, zipPath) {
   if (!fs.existsSync(path.join(lambdaDir, 'node_modules'))) {
     throw new Error(`Refusing to deploy: node_modules absent in ${lambdaDir}. Run "npm ci --omit=dev" first.`);
   }
+  const { ZipArchive } = await import('archiver');
   const files = collectAllowedFiles(lambdaDir);
   await new Promise((resolve, reject) => {
     const output = fs.createWriteStream(zipPath);

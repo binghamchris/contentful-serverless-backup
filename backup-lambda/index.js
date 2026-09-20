@@ -29,10 +29,11 @@ const fs = require('fs');
 const path = require('path');
 const { PassThrough } = require('stream');
 const contentfulExport = require('contentful-export');
-// archiver 8 is ESM-only and exports CLASSES, not a callable default. Node 24's
-// require(esm) interop gives us the namespace from CommonJS; ZipArchive extends
-// Archiver, so every instance method used below is unchanged from 7.x.
-const { ZipArchive } = require('archiver');
+// archiver 8 is ESM-only. The AWS Lambda nodejs24 runtime does NOT enable
+// require(esm) interop, so `require('archiver')` throws ERR_REQUIRE_ESM at load
+// (it works under a local Node with the flag on — a false green). It is loaded
+// with dynamic import() inside the async handler instead; ZipArchive extends
+// Archiver so every instance method used below is unchanged from 7.x.
 const { S3Client, CopyObjectCommand, ListObjectsV2Command } = require('@aws-sdk/client-s3');
 const { Upload } = require('@aws-sdk/lib-storage');
 const { SSMClient, GetParametersCommand } = require('@aws-sdk/client-ssm');
@@ -86,6 +87,8 @@ const sendResponse = (status, body) => ({ statusCode: status, body });
 // Stream a folder into a zip archive piped directly into an S3 multipart
 // upload. Returns the number of bytes uploaded (for staged-size verification).
 const streamArchiveToS3 = async (inputFolder, bucket, key, storageClass) => {
+  // Dynamic import: archiver 8 is ESM and the Lambda runtime cannot require() it.
+  const { ZipArchive } = await import('archiver');
   const pass = new PassThrough();
   let bytes = 0;
   pass.on('data', (chunk) => { bytes += chunk.length; });
