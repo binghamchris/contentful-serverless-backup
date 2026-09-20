@@ -6,12 +6,13 @@
   "engines": {
     "node": ">=24 <25"
   },
+  "//dependencyNotes": "All dependencies are on their LATEST versions. archiver 8 is pure ESM (\"type\": \"module\") and no longer exports a callable default — it exports Archiver/ZipArchive/TarArchive/JsonArchive CLASSES. index.js therefore uses `const { ZipArchive } = require('archiver')` and `new ZipArchive({ zlib: { level: 9 } })`. No ESM conversion of this function was needed: Node 24's require(esm) interop loads the namespace from CommonJS, and ZipArchive extends Archiver so every instance method used here (.directory/.pipe/.finalize/.on) is unchanged from 7.x. Verified functionally against real zip output, not only against stubs.",
   "dependencies": {
     "@aws-sdk/client-s3": "3.1136.0",
     "@aws-sdk/client-sns": "3.1136.0",
     "@aws-sdk/client-ssm": "3.1136.0",
     "@aws-sdk/lib-storage": "3.1136.0",
-    "archiver": "7.0.1",
+    "archiver": "8.0.0",
     "contentful-export": "8.5.0"
   }
 }

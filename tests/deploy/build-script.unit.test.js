@@ -6,7 +6,7 @@ const Module = require('node:module');
 const originalResolve = Module._resolveFilename;
 const stubs = {
   'dotenv': { config: () => {} },
-  'archiver': () => ({ on() { return this; }, pipe() { return this; }, file() { return this; }, finalize() { return Promise.resolve(); } }),
+  'archiver': { ZipArchive: class { on() { return this; } pipe() { return this; } file() { return this; } directory() { return this; } finalize() { return Promise.resolve(); } } },
   '@aws-sdk/credential-providers': { fromIni: () => ({}) },
   '@aws-sdk/client-lambda': {
     LambdaClient: class {}, UpdateFunctionCodeCommand: class {}, TagResourceCommand: class {},
