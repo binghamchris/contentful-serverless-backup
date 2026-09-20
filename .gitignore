@@ -133,4 +133,9 @@ dist
 *.zip
 
 .DS_Store
-/test
+
+# Kiro local settings (not shared)
+.kiro/settings/
+
+# Keep the deploy env template tracked even though .env is ignored above
+!deploy/.env.example

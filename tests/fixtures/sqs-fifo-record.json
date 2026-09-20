@@ -1,0 +1,21 @@
+{
+  "Records": [
+    {
+      "messageId": "22222222-3333-4444-5555-666666666666",
+      "receiptHandle": "AQEB-example-receipt-handle",
+      "body": "Backup needed; content state 1758340200000",
+      "attributes": {
+        "ApproximateReceiveCount": "1",
+        "SentTimestamp": "1758340210000",
+        "MessageGroupId": "backup",
+        "MessageDeduplicationId": "1758340200000",
+        "SequenceNumber": "18885032523564990000"
+      },
+      "messageAttributes": {},
+      "md5OfBody": "0123456789abcdef0123456789abcdef",
+      "eventSource": "aws:sqs",
+      "eventSourceARN": "arn:aws:sqs:eu-central-1:123456789012:contentful-backup-source.fifo",
+      "awsRegion": "eu-central-1"
+    }
+  ]
+}

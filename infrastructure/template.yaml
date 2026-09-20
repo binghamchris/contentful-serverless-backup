@@ -1,0 +1,801 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Event-driven Contentful backup system deployment
+Parameters:
+  SnsTopicArn:
+    Type: String
+    Description: The ARN for the SNS queue created by the Amplify app
+  ContentfulSpaceId:
+    Type: String
+    Description: The Space ID for the Contentful space to use for content
+  ContentfulDeliveryTokenArn:
+    Type: String
+    Description: The ARN of the SSM parameter containing the delivery token for the
+      Contentful space
+  ContentfulManagementTokenArn:
+    Type: String
+    Description: The ARN of the SSM parameter containing the management token for
+      the Contentful space
+  ContentfulSpaceEnvironment:
+    Type: String
+    Description: The environment name in Contentful space to be used
+  S3BackupBucketName:
+    Type: String
+    Description: The name to use for the backups bucket
+  InitialStorageClass:
+    Type: String
+    Description: The S3 storage class to use when backups are first put in the backup bucket
+    AllowedValues:
+      - STANDARD
+      - REDUCED_REDUNDANCY
+      - STANDARD_IA
+      - ONEZONE_IA
+      - INTELLIGENT_TIERING
+      - GLACIER
+      - DEEP_ARCHIVE
+      - GLACIER_IR
+      - EXPRESS_ONEZONE
+  LongTermStorageClass:
+    Type: String
+    Description: The S3 storage class to use for long term storage of backups
+    AllowedValues:
+      - DEEP_ARCHIVE
+      - GLACIER
+      - GLACIER_IR
+      - INTELLIGENT_TIERING
+      - ONEZONE_IA
+      - STANDARD_IA
+  LastUpdateUrl:
+    Type: String
+    Description: The URL of the last update index in the site's static API
+  LastUpdateUrlSecondary:
+    Type: String
+    Description: A second last-update index URL; the max timestamp across both is used. Leave empty for a single endpoint.
+    Default: ''
+  TargetBranch:
+    Type: String
+    Description: The Amplify branch that warrants a backup; leave empty to accept every branch. Coverage check runs regardless.
+    Default: ''
+  LastUpdateWindow:
+    Type: Number
+    Description: The time window in minutes since the last data update within which a backup will be considered necessary
+    Default: 10
+  BackupLambdaFunctionName:
+    Type: String
+    Description: The name of the Backup Lambda function
+    Default: contentful-backup
+  FilterLambdaFunctionName:
+    Type: String
+    Description: The name of the Filter Lambda function
+    Default: amplify-notification-filter
+  LogRetentionDays:
+    Type: Number
+    Description: Retention in days for the stack-managed Lambda log groups
+    Default: 90
+    AllowedValues:
+      - 1
+      - 3
+      - 5
+      - 7
+      - 14
+      - 30
+      - 60
+      - 90
+      - 120
+      - 150
+      - 180
+      - 365
+      - 400
+      - 545
+      - 731
+      - 1096
+      - 1827
+      - 2192
+      - 2557
+      - 2922
+      - 3288
+      - 3653
+  ApplicationLogLevel:
+    Type: String
+    Description: Application log level for the functions; constrained so it cannot rise above INFO and hide detail
+    Default: INFO
+    AllowedValues:
+      - DEBUG
+      - INFO
+  MaxReceiveCount:
+    Type: Number
+    Description: SQS redrive maxReceiveCount for the source queue before a message is sent to the DLQ
+    Default: 2
+    MinValue: 1
+    MaxValue: 10
+  MaxAllowedLimit:
+    Type: Number
+    Description: contentful-export page size. 200 is empirically-derived; the API/library ceiling is 1000, but the binding constraint is Contentful's 7 MiB response ceiling whose remedy is to LOWER this. Adaptive halving to 50 handles size errors at runtime.
+    Default: 200
+    MinValue: 50
+    MaxValue: 1000
+  TransitionDays:
+    Type: Number
+    Description: Days after creation before a current object transitions to LongTermStorageClass
+    Default: 60
+    MinValue: 1
+    MaxValue: 3650
+  NoncurrentVersionRetentionDays:
+    Type: Number
+    Description: Days to retain a noncurrent object version before expiry. Bounded well above TransitionDays so a version is never expired before it has transitioned.
+    Default: 210
+    MinValue: 150
+    MaxValue: 3650
+  StagingExpiryDays:
+    Type: Number
+    Description: Short TTL for objects under the staging prefix (reaped without any delete permission on a role)
+    Default: 1
+    MinValue: 1
+    MaxValue: 30
+  EnableReplication:
+    Type: String
+    Description: OFF by default opt-in. When true, cross-region replication is configured; requires ReplicationDestinationBucketArn and ReplicationRoleArn.
+    Default: 'false'
+    AllowedValues:
+      - 'true'
+      - 'false'
+  ReplicationDestinationBucketArn:
+    Type: String
+    Description: Destination bucket ARN for replication (only used when EnableReplication is true)
+    Default: ''
+  ReplicationRoleArn:
+    Type: String
+    Description: IAM role ARN S3 assumes for replication (only used when EnableReplication is true)
+    Default: ''
+  EnableObjectLock:
+    Type: String
+    Description: OFF by default opt-in. When true, S3 Object Lock is enabled in GOVERNANCE mode with a bounded retention.
+    Default: 'false'
+    AllowedValues:
+      - 'true'
+      - 'false'
+  ObjectLockRetentionDays:
+    Type: Number
+    Description: Object Lock default retention in days (only used when EnableObjectLock is true). Bounded against NoncurrentVersionRetentionDays.
+    Default: 30
+    MinValue: 1
+    MaxValue: 3650
+  AlertEmail:
+    Type: String
+    Description: Email address to receive backup-failure alerts
+    AllowedPattern: '^$|^[^@\s]+@[^@\s]+\.[^@\s]+$'
+    ConstraintDescription: Must be a valid email address, or empty when SubscribeAlertEmail is false
+    Default: ''
+  SubscribeAlertEmail:
+    Type: String
+    Description: Whether to create the email subscription on the alert topic (set false for a validation-only stack)
+    Default: 'true'
+    AllowedValues:
+      - 'true'
+      - 'false'
+  EventSourceMappingEnabled:
+    Type: String
+    Description: Whether the SQS event-source mappings are enabled (set false to deploy the stack before running the commissioning export)
+    Default: 'true'
+    AllowedValues:
+      - 'true'
+      - 'false'
+  NotifierLambdaFunctionName:
+    Type: String
+    Description: The name of the Notifier Lambda function
+    Default: contentful-backup-notifier
+
+Conditions:
+  ShouldSubscribeAlertEmail: !Equals [!Ref SubscribeAlertEmail, 'true']
+  MappingsEnabled: !Equals [!Ref EventSourceMappingEnabled, 'true']
+  ReplicationEnabled: !Equals [!Ref EnableReplication, 'true']
+  ObjectLockEnabled: !Equals [!Ref EnableObjectLock, 'true']
+
+Resources:
+  BackupLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${AWS::StackName}/backup
+      LogGroupClass: INFREQUENT_ACCESS
+      RetentionInDays: !Ref LogRetentionDays
+
+  FilterLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${AWS::StackName}/filter
+      LogGroupClass: INFREQUENT_ACCESS
+      RetentionInDays: !Ref LogRetentionDays
+
+  NotifierLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${AWS::StackName}/notifier
+      LogGroupClass: INFREQUENT_ACCESS
+      RetentionInDays: !Ref LogRetentionDays
+
+  BackupLambdaFunc:
+    Type: AWS::Lambda::Function
+    Properties:
+      Architectures:
+        - arm64
+      # MemorySize: FINAL value, set from the commissioning export
+      # (docs/backup-reliability-and-modernisation/commissioning-export.md).
+      # Measured peak on the largest production space was 378 MB — far below
+      # the 950 MB the interim assumed (the streaming redesign removed the old
+      # buffer-everything memory). 768 MB is ~2x the measured peak: comfortable
+      # headroom for content growth, and memory also buys CPU which keeps the
+      # ~14 s archiving fast. Both memory and duration sit far under the
+      # 70%-of-ceiling flag (10240 MB / 900 s).
+      MemorySize: 768
+      # Ephemeral storage FINAL. Measured /tmp use (export tree ~ a few MB of
+      # JSON + a 88 MB archive) fits easily; 1024 MB leaves generous headroom.
+      EphemeralStorage:
+        Size: 1024
+      Runtime: nodejs24.x
+      Handler: index.handler
+      LoggingConfig:
+        LogFormat: JSON
+        ApplicationLogLevel: !Ref ApplicationLogLevel
+        LogGroup: !Ref BackupLogGroup
+      Code:
+        ZipFile: |
+          exports.handler = async () => {
+            throw new Error('Backup Lambda placeholder: deployed code was never applied');
+          };
+      Environment:
+        Variables:
+          DELIVERY_TOKEN_ARN: !Ref ContentfulDeliveryTokenArn
+          MANAGEMENT_TOKEN_ARN: !Ref ContentfulManagementTokenArn
+          S3_BUCKET_NAME: !Ref S3BackupBucketName
+          S3_STORAGE_CLASS: !Ref InitialStorageClass
+          SPACE_ENV: !Ref ContentfulSpaceEnvironment
+          SPACE_ID: !Ref ContentfulSpaceId
+          SQS_QUEUE_URL: !GetAtt SQSQueue.QueueUrl
+          ALERT_TOPIC_ARN: !Ref AlertTopic
+          MAX_ALLOWED_LIMIT: !Ref MaxAllowedLimit
+      FunctionName: !Ref BackupLambdaFunctionName
+      Role: !GetAtt BackupLambdaRole.Arn
+      # 900s is the Lambda on-demand maximum; it anchors the queue timing
+      # chain (see SQSQueue). A longer budget would need Managed Instances,
+      # which breaks the zero-compute-at-rest posture.
+      Timeout: 900
+
+  BackupLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Policies:
+        - PolicyName: ContentfulBackupLambdaRolePolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:AbortMultipartUpload
+                Resource:
+                  - !Sub ${BackupBucket.Arn}/*
+              - Effect: Allow
+                # For verification (staged + final present) and promotion.
+                Action:
+                  - s3:ListBucket
+                Resource: !GetAtt BackupBucket.Arn
+              - Effect: Allow
+                # GetObject is granted ONLY on the staging prefix, for the
+                # CopyObject promotion — NOT on the archive (final) prefix.
+                # This is the narrow widening the owner chose over a delete
+                # grant.
+                Action:
+                  - s3:GetObject
+                Resource:
+                  - !Sub ${BackupBucket.Arn}/staging/*
+              - Effect: Allow
+                Action:
+                  - sns:Publish
+                Resource: !Ref AlertTopic
+              - Effect: Allow
+                Action:
+                  - kms:GenerateDataKey
+                  - kms:Decrypt
+                Resource: '*'
+                Condition:
+                  StringEquals:
+                    kms:ViaService: !Sub sns.${AWS::Region}.amazonaws.com
+              - Effect: Allow
+                # Retained as the event-source mapping's poll grant (the
+                # AWSLambdaSQSQueueExecutionRole body) — removing these detaches
+                # the trigger. The handler no longer calls DeleteMessage itself.
+                Action:
+                  - sqs:DeleteMessage
+                  - sqs:ReceiveMessage
+                  - sqs:GetQueueAttributes
+                Resource: !GetAtt SQSQueue.Arn
+              - Effect: Allow
+                Action:
+                  - ssm:GetParameters
+                Resource:
+                  - !Ref ContentfulDeliveryTokenArn
+                  - !Ref ContentfulManagementTokenArn
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource:
+                  - !Sub ${BackupLogGroup.Arn}:*
+
+  FilterLambdaFunc:
+    Type: AWS::Lambda::Function
+    Properties:
+      Architectures:
+        - arm64
+      Runtime: nodejs24.x
+      Handler: index.handler
+      LoggingConfig:
+        LogFormat: JSON
+        ApplicationLogLevel: !Ref ApplicationLogLevel
+        LogGroup: !Ref FilterLogGroup
+      Code:
+        ZipFile: |
+          exports.handler = async () => {
+            throw new Error('Filter Lambda placeholder: deployed code was never applied');
+          };
+      Environment:
+        Variables:
+          LAST_UPDATE_API_URL: !Ref LastUpdateUrl
+          LAST_UPDATE_API_URL_2: !Ref LastUpdateUrlSecondary
+          LAST_UPDATE_WINDOW: !Ref LastUpdateWindow
+          TARGET_BRANCH: !Ref TargetBranch
+          SQS_QUEUE_URL: !GetAtt SQSQueue.QueueUrl
+          S3_BUCKET_NAME: !Ref S3BackupBucketName
+          SUPPRESSION_PARAM: !Ref SuppressionParameter
+          ALERT_TOPIC_ARN: !Ref AlertTopic
+          NOTIFIER_FUNCTION_NAME: !Ref NotifierLambdaFunctionName
+      FunctionName: !Ref FilterLambdaFunctionName
+      Role: !GetAtt FilterLambdaRole.Arn
+      Timeout: 30
+
+  FilterLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Policies:
+        - PolicyName: AmplifyNotificationFilterLambdaPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - sqs:SendMessage
+                Resource: !GetAtt SQSQueue.Arn
+              - Effect: Allow
+                # For the Coverage_Check archive listing. ListBucket, NOT
+                # ListBucketVersions, and no GetObject on the archive prefix.
+                Action:
+                  - s3:ListBucket
+                Resource: !Sub arn:${AWS::Partition}:s3:::${S3BackupBucketName}
+              - Effect: Allow
+                Action:
+                  - ssm:GetParameter
+                  - ssm:PutParameter
+                Resource: !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${SuppressionParameter}
+              - Effect: Allow
+                Action:
+                  - sns:Publish
+                Resource: !Ref AlertTopic
+              - Effect: Allow
+                # KMS for the alert topic's SSE, scoped by ViaService rather
+                # than Resource:* per the design.
+                Action:
+                  - kms:GenerateDataKey
+                  - kms:Decrypt
+                Resource: '*'
+                Condition:
+                  StringEquals:
+                    kms:ViaService: !Sub sns.${AWS::Region}.amazonaws.com
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource:
+                  - !Sub ${FilterLogGroup.Arn}:*
+
+  DeadLetterQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub ${AWS::StackName}-dlq.fifo
+      FifoQueue: true
+      MessageRetentionPeriod: 1209600
+      SqsManagedSseEnabled: true
+      # Short visibility so a failed Notifier re-delivery from the DLQ is
+      # retried promptly; two attempts, then the message lands in the
+      # TerminalQueue rather than being lost.
+      VisibilityTimeout: 60
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt TerminalQueue.Arn
+        maxReceiveCount: 2
+      # Source ARN built with !Sub, not !GetAtt, to avoid the circular
+      # dependency SQSQueue <-> DeadLetterQueue would otherwise create.
+      RedriveAllowPolicy:
+        redrivePermission: byQueue
+        sourceQueueArns:
+          - !Sub arn:${AWS::Partition}:sqs:${AWS::Region}:${AWS::AccountId}:${AWS::StackName}-source.fifo
+
+  TerminalQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub ${AWS::StackName}-terminal.fifo
+      FifoQueue: true
+      MessageRetentionPeriod: 1209600
+      SqsManagedSseEnabled: true
+
+  SuppressionParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      # Standard tier: free at rest and at standard throughput; survives cold
+      # starts; keeps the 100 most recent versions (auto-deletes oldest).
+      Type: String
+      Description: Grace-bounded suppression state for the Filter's coverage email
+      Value: '{}'
+
+  SQSQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub ${AWS::StackName}-source.fifo
+      FifoQueue: true
+      SqsManagedSseEnabled: true
+      # Timing chain — these three are coupled and must not be edited in
+      # isolation:
+      #   Backup Timeout (900s) -> VisibilityTimeout (>= 6x, so a retry
+      #   never overlaps a still-running invocation) -> MessageRetentionPeriod
+      #   (>= 2 x VisibilityTimeout x MaxReceiveCount, so a message survives
+      #   long enough to reach the DLQ instead of ageing out unreachable —
+      #   the original 900s retention < 1800s visibility bug).
+      MessageRetentionPeriod: 1209600
+      DeduplicationScope: queue
+      VisibilityTimeout: 5400
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt DeadLetterQueue.Arn
+        maxReceiveCount: !Ref MaxReceiveCount
+
+  SQSQueuePolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      Queues:
+        - !Ref SQSQueue
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: DenyNonTLS
+            Effect: Deny
+            Principal: '*'
+            Action: sqs:*
+            Resource: !GetAtt SQSQueue.Arn
+            Condition:
+              Bool:
+                aws:SecureTransport: 'false'
+
+  DeadLetterQueuePolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      Queues:
+        - !Ref DeadLetterQueue
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: DenyNonTLS
+            Effect: Deny
+            Principal: '*'
+            Action: sqs:*
+            Resource: !GetAtt DeadLetterQueue.Arn
+            Condition:
+              Bool:
+                aws:SecureTransport: 'false'
+
+  TerminalQueuePolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      Queues:
+        - !Ref TerminalQueue
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: DenyNonTLS
+            Effect: Deny
+            Principal: '*'
+            Action: sqs:*
+            Resource: !GetAtt TerminalQueue.Arn
+            Condition:
+              Bool:
+                aws:SecureTransport: 'false'
+
+  BackupLambdaSQSTrigger:
+    Type: AWS::Lambda::EventSourceMapping
+    DependsOn: BackupLambdaRole
+    Properties:
+      BatchSize: 1
+      EventSourceArn: !GetAtt SQSQueue.Arn
+      Enabled: !If [MappingsEnabled, true, false]
+      FunctionName: !GetAtt BackupLambdaFunc.Arn
+
+  NotifierLambdaFunc:
+    Type: AWS::Lambda::Function
+    Properties:
+      Architectures:
+        - arm64
+      Runtime: nodejs24.x
+      Handler: index.handler
+      LoggingConfig:
+        LogFormat: JSON
+        ApplicationLogLevel: !Ref ApplicationLogLevel
+        LogGroup: !Ref NotifierLogGroup
+      Environment:
+        Variables:
+          ALERT_TOPIC_ARN: !Ref AlertTopic
+      Code:
+        ZipFile: |
+          const { SNSClient, PublishCommand } = require('@aws-sdk/client-sns');
+          // Fail-OPEN placeholder: unlike the other functions, the Notifier's
+          // placeholder PUBLISHES rather than throws. The Notifier's whole job
+          // is to raise the alarm on a dead-lettered backup; if its real code
+          // was never deployed, throwing would make the last-resort alerter
+          // itself silent. So it publishes "code never applied" and returns.
+          exports.handler = async () => {
+            const client = new SNSClient({});
+            await client.send(new PublishCommand({
+              TopicArn: process.env.ALERT_TOPIC_ARN,
+              Subject: 'Contentful backup notifier: code never applied',
+              Message: 'The Notifier Lambda placeholder is still deployed. A backup was dead-lettered but the real notifier code was never applied. Investigate immediately.',
+            }));
+            return true;
+          };
+      FunctionName: !Ref NotifierLambdaFunctionName
+      Role: !GetAtt NotifierLambdaRole.Arn
+      Timeout: 30
+
+  NotifierLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Policies:
+        - PolicyName: ContentfulBackupNotifierLambdaPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - sns:Publish
+                Resource: !Ref AlertTopic
+              - Effect: Allow
+                Action:
+                  - sqs:ReceiveMessage
+                  - sqs:DeleteMessage
+                  - sqs:GetQueueAttributes
+                Resource: !GetAtt DeadLetterQueue.Arn
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource:
+                  - !Sub ${NotifierLogGroup.Arn}:*
+
+  NotifierDLQTrigger:
+    Type: AWS::Lambda::EventSourceMapping
+    DependsOn: NotifierLambdaRole
+    Properties:
+      BatchSize: 1
+      EventSourceArn: !GetAtt DeadLetterQueue.Arn
+      Enabled: !If [MappingsEnabled, true, false]
+      FunctionName: !GetAtt NotifierLambdaFunc.Arn
+
+  AlertTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      # No explicit TopicName: an explicit name would collide with the
+      # BackupLambdaFunctionName default substring and pin the resource,
+      # preventing clean replacement. CloudFormation generates a unique name.
+      # SSE with at least the AWS-managed key for SNS.
+      KmsMasterKeyId: alias/aws/sns
+
+  AlertTopicPolicy:
+    Type: AWS::SNS::TopicPolicy
+    Properties:
+      Topics:
+        - !Ref AlertTopic
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          # Enumerated permitted publishers: only the three functions' roles.
+          - Sid: PermittedPublishers
+            Effect: Allow
+            Principal:
+              AWS:
+                - !GetAtt BackupLambdaRole.Arn
+                - !GetAtt FilterLambdaRole.Arn
+                - !GetAtt NotifierLambdaRole.Arn
+            Action: sns:Publish
+            Resource: !Ref AlertTopic
+          - Sid: DenyNonTLS
+            Effect: Deny
+            Principal: '*'
+            Action: sns:Publish
+            Resource: !Ref AlertTopic
+            Condition:
+              Bool:
+                aws:SecureTransport: 'false'
+
+  AlertEmailSubscription:
+    Type: AWS::SNS::Subscription
+    Condition: ShouldSubscribeAlertEmail
+    Properties:
+      Protocol: email
+      Endpoint: !Ref AlertEmail
+      TopicArn: !Ref AlertTopic
+
+  FilterSNSTrigger:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt FilterLambdaFunc.Arn
+      Action: lambda:InvokeFunction
+      Principal: sns.amazonaws.com
+      SourceArn: !Ref SnsTopicArn
+
+  SNSSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      Protocol: lambda
+      Endpoint: !GetAtt FilterLambdaFunc.Arn
+      TopicArn: !Ref SnsTopicArn
+
+  BackupBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Ref S3BackupBucketName
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      VersioningConfiguration:
+        Status: Enabled
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      # Object Lock is an OFF-by-default opt-in; NoValue when disabled so it is
+      # never required to deploy. (Object Lock also requires versioning, which
+      # is always on above.)
+      ObjectLockEnabled: !If [ObjectLockEnabled, true, !Ref 'AWS::NoValue']
+      ObjectLockConfiguration: !If
+        - ObjectLockEnabled
+        - ObjectLockEnabled: Enabled
+          Rule:
+            DefaultRetention:
+              Mode: GOVERNANCE
+              Days: !Ref ObjectLockRetentionDays
+        - !Ref 'AWS::NoValue'
+      ReplicationConfiguration: !If
+        - ReplicationEnabled
+        - Role: !Ref ReplicationRoleArn
+          Rules:
+            - Id: ReplicateAll
+              Status: Enabled
+              Priority: 0
+              DeleteMarkerReplication:
+                Status: Enabled
+              Filter: {}
+              Destination:
+                Bucket: !Ref ReplicationDestinationBucketArn
+        - !Ref 'AWS::NoValue'
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+          # NO current-version expiry: criterion 34.9 requires the newest
+          # archive retained unconditionally, and S3 lifecycle has no
+          # "newest object" predicate, so current versions are never expired.
+          - Id: TransitionCurrentToLongTerm
+            Status: Enabled
+            Transitions:
+              - TransitionInDays: !Ref TransitionDays
+                StorageClass: !Ref LongTermStorageClass
+          - Id: ExpireNoncurrentVersions
+            Status: Enabled
+            NoncurrentVersionExpiration:
+              NoncurrentDays: !Ref NoncurrentVersionRetentionDays
+          - Id: RemoveExpiredDeleteMarkers
+            Status: Enabled
+            ExpiredObjectDeleteMarker: true
+          - Id: AbortIncompleteMultipartUploads
+            Status: Enabled
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 1
+          - Id: ExpireStagingPrefix
+            Status: Enabled
+            Prefix: staging/
+            ExpirationInDays: !Ref StagingExpiryDays
+
+  BackupBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref BackupBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: DenyNonTLS
+            Effect: Deny
+            Principal: '*'
+            Action: s3:*
+            Resource:
+              - !GetAtt BackupBucket.Arn
+              - !Sub ${BackupBucket.Arn}/*
+            Condition:
+              Bool:
+                aws:SecureTransport: 'false'
+          # NOTE: an earlier DenyUnencryptedPutObject statement was removed. It
+          # denied any PutObject whose s3:x-amz-server-side-encryption header
+          # was not AES256/aws:kms — but a request that OMITS the header matches
+          # StringNotEquals and was denied, which blocked the Backup function's
+          # own streamed lib-storage upload (it does not set the header). The
+          # bucket's BucketEncryption default (AES256) already guarantees
+          # encryption at rest for every object regardless of the request
+          # header, so the deny added no security and only broke uploads.
+
+Outputs:
+  AlertTopicArn:
+    Description: ARN of the SNS topic that carries backup-failure alerts
+    Value: !Ref AlertTopic
+    Export:
+      Name: !Sub ${AWS::StackName}-AlertTopicArn
+  SourceQueueUrl:
+    Description: URL of the source backup queue
+    Value: !GetAtt SQSQueue.QueueUrl
+  DeadLetterQueueUrl:
+    Description: URL of the dead-letter queue consumed by the Notifier
+    Value: !GetAtt DeadLetterQueue.QueueUrl
+  TerminalQueueUrl:
+    Description: URL of the terminal queue holding messages that exhausted DLQ redrive
+    Value: !GetAtt TerminalQueue.QueueUrl
+  BackupBucketName:
+    Description: Name of the backup bucket
+    Value: !Ref BackupBucket
+  BackupFunctionName:
+    Description: Name of the Backup Lambda function (read by the deploy script)
+    Value: !Ref BackupLambdaFunc
+  FilterFunctionName:
+    Description: Name of the Filter Lambda function (read by the deploy script)
+    Value: !Ref FilterLambdaFunc
+  NotifierFunctionName:
+    Description: Name of the Notifier Lambda function (read by the deploy script)
+    Value: !Ref NotifierLambdaFunc

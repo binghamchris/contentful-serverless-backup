@@ -1,9 +1,7 @@
 # System Deployment
 This directory contains the code needed to deploy the solution on AWS, including:
 
-- `deploy.yaml`: a CloudFormation template defining the AWS resources needed for the solution.
-- `build-backup-lambda.js`: a Node.js script which deploys the code for the backup Lambda function and it's dependencies into a Lambda function created by `deploy.yaml`.
-- `build-filter-lambda.js`: a Node.js script which deploys the code for the filter Lambda function and it's dependencies into a Lambda function created by `deploy.yaml`.
+- `build-lambda.js`: a Node.js script which deploys the code for a Lambda function and its dependencies into a Lambda function created by the CloudFormation template at `infrastructure/template.yaml`. It accepts a single argument (`backup` or `filter`) to select the target Lambda.
 
 ## Deployment Process
 There are four steps to deploying the solution:
@@ -34,36 +32,116 @@ For this reason, these tokens should be stored in either AWS Systems Manager (SS
 Create two `SecureString` parameters in Parameter Store, one each for the management and delivery tokens, and store the tokens in them. Make a note of the parameters' ARNs for use in step 3.
 
 ### 3. Deploy the CloudFormation Template
-Deploy the CloudFormation template providing the following template parameters:
 
-- `ContentfulSpaceId`: The ID of the Contentful space to be backed up, to which the management and delivery tokens provide access.
-- `ContentfulDeliveryTokenArn`: The ARN of the parameter in SSM Parameter Store containing the delivery token.
-- `ContentfulManagementTokenArn`: The ARN of the parameter in SSM Parameter Store containing the management token.
-- `ContentfulSpaceEnvironment`: The name of the environment in the Contentful space to backup. To achieve a full backup of the space's configuration this must be `master`.
-- `InitialStorageClass`: The S3 storage class which the backup Lambda function shall set on backup files when they are first uploaded to the S3 bucket.
-- `LastUpdateWindow`: The time window, in minutes, since the last data update within which a backup is required.
-- `LastUpdateUrl`: The URL of the static API providing the last update timestamp(s) for the data in Contentful. Please see the filter Lambda function's README for more details.
-- `LongTermStorageClass`: The S3 storage class to transition backups to via the S3 bucket's lifecycle configuration.
-- `SnsTopicArn`: The ARN of the SNS topic, created by AWS Amplify, which shall serve as the event source to trigger the backup system.
-- `S3BackupBucketName`: The name for the S3 bucket, which will be created and configured to store the backups.
+This is a **two-pass deployment**. The final `MemorySize` and `EphemeralStorageSize`
+can only be measured by running the one-time commissioning export on the deployed
+function, so the first pass deploys with the event-source mappings **disabled** and
+interim sizing, and a second pass (see step 5) sets the finals.
 
-The CloudFormation template will deploy the two Lambda functions with non-functional placeholder code, which will be replaced in the next step.
+**First pass** — deploy with the mappings off so no message is consumed before the
+code is applied. Run from the repository root (region `eu-central-1`, your `-dev`
+profile). Auto-named IAM roles need `CAPABILITY_IAM`:
+
+```bash
+aws cloudformation deploy \
+  --template-file infrastructure/template.yaml \
+  --stack-name contentful-backup \
+  --capabilities CAPABILITY_IAM \
+  --profile <your-profile-dev> \
+  --region eu-central-1 \
+  --parameter-overrides \
+    SnsTopicArn=<amplify-sns-topic-arn> \
+    ContentfulSpaceId=<space-id> \
+    ContentfulDeliveryTokenArn=<ssm-arn-of-delivery-token> \
+    ContentfulManagementTokenArn=<ssm-arn-of-management-token> \
+    ContentfulSpaceEnvironment=master \
+    S3BackupBucketName=<globally-unique-bucket-name> \
+    InitialStorageClass=STANDARD \
+    LongTermStorageClass=GLACIER \
+    LastUpdateUrl=<last-update-index-url> \
+    AlertEmail=<you@example.com> \
+    EventSourceMappingEnabled=false
+```
+
+#### Required parameters
+
+- `SnsTopicArn` — ARN of the Amplify build-notification SNS topic that triggers the system.
+- `ContentfulSpaceId` — the Contentful space to back up.
+- `ContentfulDeliveryTokenArn` — SSM Parameter Store ARN of the delivery token (`SecureString`).
+- `ContentfulManagementTokenArn` — SSM Parameter Store ARN of the management token (`SecureString`).
+- `ContentfulSpaceEnvironment` — the Contentful environment; use `master` for a full config backup.
+- `S3BackupBucketName` — globally-unique name for the backup bucket (created by the stack).
+- `InitialStorageClass` — S3 class for freshly-uploaded backups.
+- `LongTermStorageClass` — S3 class the lifecycle transitions backups to.
+- `LastUpdateUrl` — URL of the static last-update index (see the filter Lambda README).
+
+#### Optional parameters (all defaulted; none is required to deploy)
+
+- `LastUpdateUrlSecondary` (`''`) — a second last-update index; the max timestamp across both is used.
+- `TargetBranch` (`''`) — restrict backups to one Amplify branch; empty accepts every branch. The coverage check runs regardless.
+- `LastUpdateWindow` (`10`) — minutes since the last data update within which a backup is warranted.
+- `BackupLambdaFunctionName` (`contentful-backup`), `FilterLambdaFunctionName` (`amplify-notification-filter`), `NotifierLambdaFunctionName` (`contentful-backup-notifier`).
+- `LogRetentionDays` (`90`), `ApplicationLogLevel` (`INFO`; `DEBUG` is the only other value).
+- `MaxReceiveCount` (`2`) — source-queue redrive count before the DLQ.
+- `MaxAllowedLimit` (`200`) — `contentful-export` page size; the runtime halves it to a floor of 50 on a size error.
+- `TransitionDays` (`60`), `NoncurrentVersionRetentionDays` (`210`), `StagingExpiryDays` (`1`).
+- `EnableReplication` (`false`), `ReplicationDestinationBucketArn` (`''`), `ReplicationRoleArn` (`''`) — OFF-by-default cross-region replication.
+- `EnableObjectLock` (`false`), `ObjectLockRetentionDays` (`30`) — OFF-by-default S3 Object Lock (GOVERNANCE).
+- `AlertEmail` (`''`), `SubscribeAlertEmail` (`true`) — failure-alert email. When `SubscribeAlertEmail=true` (the default) you must supply a valid `AlertEmail`; set `SubscribeAlertEmail=false` for a validation-only stack.
+- `EventSourceMappingEnabled` (`true`) — set `false` for the first pass, then `true` after code is applied.
+
+**Confirm the email subscription.** After the first deploy, AWS SNS sends a
+confirmation email to `AlertEmail`. The alert channel does not work until you click
+the confirmation link — do this before relying on failure alerts.
+
+> **One residual manual step (log groups).** The functions write to stack-managed
+> log groups (`/aws/lambda/<stack-name>/{backup,filter,notifier}`). AWS Lambda also
+> historically created *implicit* groups named `/aws/lambda/<function-name>` on first
+> invocation; those are not managed by this stack. Delete them by hand once, after
+> cutover, to stop paying their retention:
+>
+> ```bash
+> aws logs delete-log-group --log-group-name /aws/lambda/contentful-backup \
+>   --profile <your-profile-dev> --region eu-central-1
+> aws logs delete-log-group --log-group-name /aws/lambda/amplify-notification-filter \
+>   --profile <your-profile-dev> --region eu-central-1
+> ```
 
 ### 4. Deploy the Lambda Function Code
 
-**Please Note:** This step assumes that the workstation being used has the AWS CLI configured with credentials which have the `lambda:UpdateFunctionCode` permission on the Lambda functions deployed in the previous step.
+The solution deploys each function's code and dependencies as a ZIP via
+`UpdateFunctionCode` directly from a workstation (the intentionally low-infrastructure
+model). The deploy script is reproducible and gated: it refuses on a dirty git tree,
+packages from an allow-list, refuses any credential-shaped file, requires
+`node_modules`, tags the deployed commit, and prunes to three published versions. It
+reads the three function names from the stack's outputs.
 
-To minimise infrastructure requirements and ongoing costs, this solution deploys the Node.js code and npm dependencies for each Lambda function as a ZIP file directly from a local workstation.
+Create `deploy/.env` (see `deploy/.env.example`):
 
-The deployment scripts source their configuration from a `.env` file in the `deploy` directory. Create a file named `.env` containing the following environment variables:
+- `AWS_PROFILE_NAME` — the AWS CLI profile (must end `-dev`).
+- `STACK_NAME` — the CloudFormation stack name from step 3.
 
-- `AWS_PROFILE_NAME`: The name of the profile configured in for the AWS CLI to use with the deployment scripts.
-- `BACKUP_LAMBDA_FUNC_NAME`: The name of the backup Lambda function. The default value is `contentful-backup`.
-- `FILTER_LAMBDA_FUNC_NAME`: The name of the filter Lambda function. The default value is `amplify-notification-filter`.
+Then, with a **clean git tree**:
 
-Once the `.env` file is in place, run the following commands to build and deploy the Lambda function code and dependencies:
+```bash
+# Install production dependencies for each function (reproducible install)
+(cd backup-lambda && npm ci --omit=dev)
+(cd filter-lambda && npm ci --omit=dev)
+(cd notifier-lambda && npm ci --omit=dev)
 
-1. In the `backup-lambda` directory run: `npm i` to install its dependencies.
-2. In the `filter-lambda` directory run: `npm i` to install its dependencies.
-3. In the `deploy` directory run: `node build-backup-lambda.js` to deploy the backup Lambda function's code and dependencies.
-4. In the `deploy` directory run: `node build-filter-lambda.js` to deploy the filters Lambda function's code and dependencies.
+# Deploy each function's code
+(cd deploy && node build-lambda.js backup)
+(cd deploy && node build-lambda.js filter)
+(cd deploy && node build-lambda.js notifier)
+```
+
+**Enable the mappings.** Once all three functions are on real code, redeploy the
+stack from step 3 with `EventSourceMappingEnabled=true` (omit it, since `true` is the
+default) to connect the queues.
+
+### 5. Second pass — finalise sizing
+
+Run the one-time commissioning export, read the measured memory/duration envelope
+recorded under `docs/`, and redeploy step 3 with the measured `MemorySize`,
+`EphemeralStorageSize` and grace period. See the design's sizing section for the
+70%-of-ceiling trend obligation.

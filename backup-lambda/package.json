@@ -1,6 +1,17 @@
 {
+  "name": "contentful-backup-lambda",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Backup Lambda: exports Contentful, archives, stages, verifies and promotes to S3",
+  "engines": {
+    "node": ">=24 <25"
+  },
   "dependencies": {
-    "adm-zip": "^0.5.12",
-    "contentful-export": "^7.19.144"
+    "@aws-sdk/client-s3": "3.709.0",
+    "@aws-sdk/client-sns": "3.709.0",
+    "@aws-sdk/client-ssm": "3.709.0",
+    "@aws-sdk/lib-storage": "3.709.0",
+    "archiver": "7.0.1",
+    "contentful-export": "8.5.0"
   }
 }

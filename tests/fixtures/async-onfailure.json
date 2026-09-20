@@ -1,0 +1,24 @@
+{
+  "version": "1.0",
+  "timestamp": "2026-09-20T04:52:00.336Z",
+  "requestContext": {
+    "requestId": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+    "functionArn": "arn:aws:lambda:eu-central-1:123456789012:function:amplify-notification-filter",
+    "condition": "RetriesExhausted",
+    "approximateInvokeCount": 3
+  },
+  "requestPayload": {
+    "Records": [
+      { "Sns": { "Message": "{\"jobStatus\":\"SUCCEED\",\"appUrl\":\"https://main.d123.amplifyapp.com\"}" } }
+    ]
+  },
+  "responseContext": {
+    "statusCode": 200,
+    "executedVersion": "$LATEST",
+    "functionError": "Unhandled"
+  },
+  "responsePayload": {
+    "errorType": "Error",
+    "errorMessage": "Filter Lambda invoked with no records"
+  }
+}

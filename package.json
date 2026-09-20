@@ -1,0 +1,17 @@
+{
+  "name": "contentful-backup-system",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Event-driven Contentful backup system for AWS Amplify-hosted apps",
+  "scripts": {
+    "test": "node --test 'tests/**/*.test.js'",
+    "test:coverage": "node --test --experimental-test-coverage 'tests/**/*.test.js'",
+    "lint:cfn": "cfn-lint infrastructure/template.yaml",
+    "scan:cfn": "cfn-guard validate --data infrastructure/template.yaml --rules infrastructure/cfn-guard.rules || checkov -f infrastructure/template.yaml",
+    "audit": "npm audit --omit=dev --audit-level=high"
+  },
+  "devDependencies": {
+    "fast-check": "^3.22.0",
+    "js-yaml": "^4.1.1"
+  }
+}
