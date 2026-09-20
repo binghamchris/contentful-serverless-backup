@@ -65,3 +65,28 @@ kept. The failed first run cost one export's worth of Contentful quota.
 - A failed stack update **orphans** the `Retain`-policy log groups; their names
   then collide on the next deploy (`ResourceExistenceCheck` early-validation
   failure). Delete the orphaned groups before retrying.
+
+## Finalised sizing (task 15) and retest
+
+Applied the measured finals and redeployed the locale-fixed code (commit
+`2c2dc8d`, function version 2), then retested with one export:
+
+| Metric | Interim | Final | Retest actual |
+|---|---|---|---|
+| MemorySize | 1536 MB | **768 MB** | peak 338 MB (44% util) |
+| EphemeralStorage | 2048 MB | **1024 MB** | fits easily |
+| Duration | 13.8 s @ 1536 MB | — | **26.2 s @ 768 MB** |
+
+The retest succeeded end-to-end (archive promoted to
+`2026/09/20/2026-09-20_05-53-10.359Z.zip`, 0 errors) and the locale-fixed
+reconciliation ran for real against the 97 en-GB assets (no shortfall).
+
+Note the duration doubled (13.8 s → 26.2 s) at half the memory: Lambda scales
+CPU with memory, so archiving the ~88 MB is CPU-bound and slower at 768 MB.
+This is the intended cost/speed trade — 26 s is still 2.9% of the 900 s ceiling.
+If backup latency ever matters, raising memory buys proportional speed; for an
+infrequent backup it does not, so 768 MB is the right economy.
+
+**Tags:** the space has 0 tags, so the published-state switch loses nothing —
+decision settled, no design amendment needed.
+
