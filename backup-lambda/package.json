@@ -11,7 +11,7 @@
     "@aws-sdk/client-sns": "3.1136.0",
     "@aws-sdk/client-ssm": "3.1136.0",
     "@aws-sdk/lib-storage": "3.1136.0",
-    "archiver": "7.0.1",
+    "archiver": "8.0.0",
     "contentful-export": "8.5.0"
   }
 }
