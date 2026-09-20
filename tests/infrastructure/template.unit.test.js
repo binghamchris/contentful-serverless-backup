@@ -70,39 +70,32 @@ describe('Req 9.2: SQSQueue RedrivePolicy', () => {
   });
 });
 
-// Req 9.3: BackupLambdaRole has DLQ permissions
-describe('Req 9.3: BackupLambdaRole DLQ permissions', () => {
-  it('should grant BackupLambdaRole permissions on the DLQ', () => {
-    const backupRole = template.Resources.BackupLambdaRole;
-    assert.ok(backupRole, 'BackupLambdaRole must exist');
+// Req 9.3: DLQ consumption permissions belong to the NOTIFIER role (the DLQ
+// consumer), NOT the Backup role — the redesign moved dead-letter handling to
+// the Notifier. The Backup role must NOT hold DLQ grants (task 6).
+describe('Req 9.3: DLQ permissions on the Notifier, not the Backup role', () => {
+  it('should grant the NotifierLambdaRole receive/delete/getattributes on the DLQ', () => {
+    const notifierRole = template.Resources.NotifierLambdaRole;
+    assert.ok(notifierRole, 'NotifierLambdaRole must exist');
 
-    const statements = backupRole.Properties.Policies.flatMap(
+    const statements = notifierRole.Properties.Policies.flatMap(
       (p) => p.PolicyDocument.Statement
     );
-
-    // Find statements that reference the DLQ ARN
     const dlqStatements = statements.filter((s) => {
       const resources = Array.isArray(s.Resource) ? s.Resource : [s.Resource];
-      return resources.some((r) => {
-        if (typeof r === 'string') return r.includes('DeadLetterQueue');
-        if (typeof r === 'object' && r !== null) {
-          const str = JSON.stringify(r);
-          return str.includes('DeadLetterQueue');
-        }
-        return false;
-      });
+      return resources.some((r) => JSON.stringify(r).includes('DeadLetterQueue'));
     });
-
-    assert.ok(dlqStatements.length > 0, 'Must have at least one IAM statement for DLQ');
+    assert.ok(dlqStatements.length > 0, 'Notifier must have an IAM statement for the DLQ');
 
     const dlqActions = dlqStatements.flatMap((s) => s.Action);
-    const requiredActions = ['sqs:ReceiveMessage', 'sqs:DeleteMessage', 'sqs:GetQueueAttributes'];
-    for (const action of requiredActions) {
-      assert.ok(
-        dlqActions.includes(action),
-        `BackupLambdaRole must have ${action} on DLQ, found: ${dlqActions.join(', ')}`
-      );
+    for (const action of ['sqs:ReceiveMessage', 'sqs:DeleteMessage', 'sqs:GetQueueAttributes']) {
+      assert.ok(dlqActions.includes(action), `Notifier must have ${action} on the DLQ`);
     }
+  });
+
+  it('should NOT grant the Backup role any DLQ permissions', () => {
+    const backupRole = JSON.stringify(template.Resources.BackupLambdaRole);
+    assert.ok(!backupRole.includes('DeadLetterQueue'), 'Backup role must not reference the DLQ');
   });
 });
 

@@ -47,6 +47,14 @@ Parameters:
   LastUpdateUrl:
     Type: String
     Description: The URL of the last update index in the site's static API
+  LastUpdateUrlSecondary:
+    Type: String
+    Description: A second last-update index URL; the max timestamp across both is used. Leave empty for a single endpoint.
+    Default: ''
+  TargetBranch:
+    Type: String
+    Description: The Amplify branch that warrants a backup; leave empty to accept every branch. Coverage check runs regardless.
+    Default: ''
   LastUpdateWindow:
     Type: Number
     Description: The time window in minutes since the last data update within which a backup will be considered necessary
@@ -225,17 +233,14 @@ Resources:
                 Resource:
                   - !Sub ${BackupBucket.Arn}/*
               - Effect: Allow
+                # Retained as the event-source mapping's poll grant (the
+                # AWSLambdaSQSQueueExecutionRole body) — removing these detaches
+                # the trigger. The handler no longer calls DeleteMessage itself.
                 Action:
                   - sqs:DeleteMessage
                   - sqs:ReceiveMessage
                   - sqs:GetQueueAttributes
                 Resource: !GetAtt SQSQueue.Arn
-              - Effect: Allow
-                Action:
-                  - sqs:ReceiveMessage
-                  - sqs:DeleteMessage
-                  - sqs:GetQueueAttributes
-                Resource: !GetAtt DeadLetterQueue.Arn
               - Effect: Allow
                 Action:
                   - ssm:GetParameters
@@ -269,8 +274,14 @@ Resources:
       Environment:
         Variables:
           LAST_UPDATE_API_URL: !Ref LastUpdateUrl
+          LAST_UPDATE_API_URL_2: !Ref LastUpdateUrlSecondary
           LAST_UPDATE_WINDOW: !Ref LastUpdateWindow
+          TARGET_BRANCH: !Ref TargetBranch
           SQS_QUEUE_URL: !GetAtt SQSQueue.QueueUrl
+          S3_BUCKET_NAME: !Ref S3BackupBucketName
+          SUPPRESSION_PARAM: !Ref SuppressionParameter
+          ALERT_TOPIC_ARN: !Ref AlertTopic
+          NOTIFIER_FUNCTION_NAME: !Ref NotifierLambdaFunctionName
       FunctionName: !Ref FilterLambdaFunctionName
       Role: !GetAtt FilterLambdaRole.Arn
       Timeout: 30
@@ -296,6 +307,31 @@ Resources:
                 Action:
                   - sqs:SendMessage
                 Resource: !GetAtt SQSQueue.Arn
+              - Effect: Allow
+                # For the Coverage_Check archive listing. ListBucket, NOT
+                # ListBucketVersions, and no GetObject on the archive prefix.
+                Action:
+                  - s3:ListBucket
+                Resource: !Sub arn:${AWS::Partition}:s3:::${S3BackupBucketName}
+              - Effect: Allow
+                Action:
+                  - ssm:GetParameter
+                  - ssm:PutParameter
+                Resource: !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${SuppressionParameter}
+              - Effect: Allow
+                Action:
+                  - sns:Publish
+                Resource: !Ref AlertTopic
+              - Effect: Allow
+                # KMS for the alert topic's SSE, scoped by ViaService rather
+                # than Resource:* per the design.
+                Action:
+                  - kms:GenerateDataKey
+                  - kms:Decrypt
+                Resource: '*'
+                Condition:
+                  StringEquals:
+                    kms:ViaService: !Sub sns.${AWS::Region}.amazonaws.com
               - Effect: Allow
                 Action:
                   - logs:CreateLogStream
@@ -332,6 +368,15 @@ Resources:
       FifoQueue: true
       MessageRetentionPeriod: 1209600
       SqsManagedSseEnabled: true
+
+  SuppressionParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      # Standard tier: free at rest and at standard throughput; survives cold
+      # starts; keeps the 100 most recent versions (auto-deletes oldest).
+      Type: String
+      Description: Grace-bounded suppression state for the Filter's coverage email
+      Value: '{}'
 
   SQSQueue:
     Type: AWS::SQS::Queue

@@ -1,3 +1,15 @@
 {
-  "dependencies": {}
+  "name": "contentful-backup-filter-lambda",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Filter Lambda: decides whether an Amplify build warrants a backup and runs the coverage check",
+  "engines": {
+    "node": ">=24 <25"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "3.709.0",
+    "@aws-sdk/client-sns": "3.709.0",
+    "@aws-sdk/client-sqs": "3.709.0",
+    "@aws-sdk/client-ssm": "3.709.0"
+  }
 }
