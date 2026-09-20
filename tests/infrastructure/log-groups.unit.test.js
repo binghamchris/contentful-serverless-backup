@@ -59,8 +59,10 @@ describe('Req 5: functions log JSON to their group and cannot log above INFO', (
       assert.ok(lc, `${fn} must set LoggingConfig`);
       assert.equal(lc.LogFormat, 'JSON');
       assert.equal(JSON.stringify(lc.LogGroup), JSON.stringify({ 'Fn::Ref': group }));
-      const dep = Array.isArray(res.DependsOn) ? res.DependsOn : [res.DependsOn];
-      assert.ok(dep.includes(group), `${fn} must DependsOn ${group}`);
+      // The LoggingConfig.LogGroup !Ref already creates the create-ordering
+      // dependency on the group, so an explicit DependsOn is redundant (cfn-lint
+      // W3005) and MUST NOT be present. The Ref above is what enforces ordering.
+      assert.ok(!res.DependsOn, `${fn} must not carry a redundant DependsOn — the LoggingConfig Ref enforces ordering`);
     });
   }
 });

@@ -220,7 +220,6 @@ Resources:
 
   BackupLambdaFunc:
     Type: AWS::Lambda::Function
-    DependsOn: BackupLogGroup
     Properties:
       Architectures:
         - arm64
@@ -339,7 +338,6 @@ Resources:
 
   FilterLambdaFunc:
     Type: AWS::Lambda::Function
-    DependsOn: FilterLogGroup
     Properties:
       Architectures:
         - arm64
@@ -542,7 +540,6 @@ Resources:
 
   NotifierLambdaFunc:
     Type: AWS::Lambda::Function
-    DependsOn: NotifierLogGroup
     Properties:
       Architectures:
         - arm64
