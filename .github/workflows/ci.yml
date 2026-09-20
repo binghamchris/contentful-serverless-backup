@@ -31,15 +31,23 @@ jobs:
           node-version: '24'
       - name: Install root dev deps (test runner, fast-check, js-yaml)
         run: npm ci || npm install
-      - name: Run the full test suite (Node built-in runner)
-        run: node --test 'tests/**/*.test.js'
-      - name: Run the mutation pass on the core decision logic
-        run: node scripts/mutation-pass.js
-      - name: Install per-function deps for audit
+      - name: Install per-function production deps
+        # MUST run BEFORE the suite. Two reasons:
+        #  1. backup-lambda/index.js loads archiver 8 with `await import()` (it is
+        #     ESM). Dynamic import bypasses the require.cache stubbing the handler
+        #     tests use, so the REAL package must be resolvable or those tests fail
+        #     with ERR_MODULE_NOT_FOUND.
+        #  2. tests/backup-lambda/archiver8-real.unit.test.js deliberately exercises
+        #     the real archiver; without these deps it silently SKIPS, which would
+        #     leave the ESM-migration guard unenforced in CI.
         run: |
           for dir in backup-lambda filter-lambda notifier-lambda deploy; do
             (cd "$dir" && npm ci --omit=dev)
           done
+      - name: Run the full test suite (Node built-in runner)
+        run: node --test 'tests/**/*.test.js'
+      - name: Run the mutation pass on the core decision logic
+        run: node scripts/mutation-pass.js
       - name: npm audit (production deps) — fail on CRITICAL
         # Hard gate at CRITICAL. The AWS SDK was bumped to 3.1136 which drops the
         # transitive fast-xml-parser dependency entirely, clearing the only
