@@ -767,16 +767,14 @@ Resources:
             Condition:
               Bool:
                 aws:SecureTransport: 'false'
-          - Sid: DenyUnencryptedPutObject
-            Effect: Deny
-            Principal: '*'
-            Action: s3:PutObject
-            Resource: !Sub ${BackupBucket.Arn}/*
-            Condition:
-              StringNotEquals:
-                s3:x-amz-server-side-encryption:
-                  - AES256
-                  - aws:kms
+          # NOTE: an earlier DenyUnencryptedPutObject statement was removed. It
+          # denied any PutObject whose s3:x-amz-server-side-encryption header
+          # was not AES256/aws:kms — but a request that OMITS the header matches
+          # StringNotEquals and was denied, which blocked the Backup function's
+          # own streamed lib-storage upload (it does not set the header). The
+          # bucket's BucketEncryption default (AES256) already guarantees
+          # encryption at rest for every object regardless of the request
+          # header, so the deny added no security and only broke uploads.
 
 Outputs:
   AlertTopicArn:

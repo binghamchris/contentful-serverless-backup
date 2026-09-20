@@ -53,10 +53,16 @@ describe('Req 35/36: ownership, retain, TLS+SSE policy', () => {
     assert.equal(bucket.UpdateReplacePolicy, 'Retain');
   });
 
-  it('has a bucket policy denying non-TLS and unencrypted PutObject', () => {
+  it('has a bucket policy denying non-TLS access, and no SSE-header deny that would block default-encrypted uploads', () => {
     const stmts = template.Resources.BackupBucketPolicy.Properties.PolicyDocument.Statement;
     assert.ok(stmts.some((s) => s.Sid === 'DenyNonTLS' && s.Effect === 'Deny'));
-    assert.ok(stmts.some((s) => s.Sid === 'DenyUnencryptedPutObject' && s.Effect === 'Deny'));
+    // The DenyUnencryptedPutObject statement was removed: it denied PutObject
+    // requests that omit the SSE header, which blocked the Backup function's
+    // own streamed upload. Bucket default encryption covers encryption at rest.
+    assert.ok(
+      !stmts.some((s) => s.Sid === 'DenyUnencryptedPutObject'),
+      'the SSE-header PutObject deny must not be present (it blocked legitimate uploads)'
+    );
   });
 
   it('declares NO LoggingConfiguration and NO second bucket', () => {
