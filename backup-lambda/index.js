@@ -170,6 +170,10 @@ exports.handler = async (event) => {
     throw new Error('Backup Lambda invoked with no SQS records');
   }
   const record = records[0];
+  const messageId = record && record.messageId;
+  // Structured phase logger so the Notifier's Logs Insights query can filter
+  // on `messageId` and `phase`.
+  const logPhase = (phase, extra) => console.log(JSON.stringify({ messageId, phase, ...extra }));
 
   try {
     const datetime = new Date();
@@ -220,6 +224,7 @@ exports.handler = async (event) => {
       maxAllowedLimit,
     };
     const result = await contentfulExport(exportOptions);
+    logPhase('export', { note: 'export complete' });
     console.log(`Export complete for space ${process.env.SPACE_ID} env ${process.env.SPACE_ENV}`);
 
     // ---- asset completeness reconciliation -------------------------------
@@ -250,6 +255,7 @@ exports.handler = async (event) => {
     // return lets the event-source mapping delete the message.
     return sendResponse(200, `Backup successful: ${finalKey}`);
   } catch (err) {
+    console.error(JSON.stringify({ messageId, phase: 'failed', error: err && err.message }));
     console.error(`Backup failed: ${err && err.message}`);
     if (err && err.stack) console.error(err.stack);
     await publishFailureIfFirstDelivery(record, err);
