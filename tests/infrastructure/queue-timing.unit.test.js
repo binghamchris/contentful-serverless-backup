@@ -65,7 +65,7 @@ describe('Req 39: terminal queue and DLQ redrive', () => {
     const arn = JSON.stringify(rap.sourceQueueArns);
     assert.ok(arn.includes('Fn::Sub'), 'source ARN must be built with !Sub to avoid a circular dependency');
     assert.ok(!arn.includes('Fn::GetAtt'), 'source ARN must not use !GetAtt (circular dependency)');
-    assert.ok(arn.includes('contentfulBackupQueue.fifo'));
+    assert.ok(arn.includes('-source.fifo'), 'must reference the source queue by its stack-derived name');
   });
 });
 

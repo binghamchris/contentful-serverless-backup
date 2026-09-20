@@ -268,7 +268,6 @@ Resources:
   BackupLambdaRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: ContentfulBackupLambdaRole
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -421,12 +420,11 @@ Resources:
                   - logs:PutLogEvents
                 Resource:
                   - !Sub ${FilterLogGroup.Arn}:*
-      RoleName: AmplifyNotificationFilterLambdaRole
 
   DeadLetterQueue:
     Type: AWS::SQS::Queue
     Properties:
-      QueueName: contentfulBackupDLQ.fifo
+      QueueName: !Sub ${AWS::StackName}-dlq.fifo
       FifoQueue: true
       MessageRetentionPeriod: 1209600
       SqsManagedSseEnabled: true
@@ -442,12 +440,12 @@ Resources:
       RedriveAllowPolicy:
         redrivePermission: byQueue
         sourceQueueArns:
-          - !Sub arn:${AWS::Partition}:sqs:${AWS::Region}:${AWS::AccountId}:contentfulBackupQueue.fifo
+          - !Sub arn:${AWS::Partition}:sqs:${AWS::Region}:${AWS::AccountId}:${AWS::StackName}-source.fifo
 
   TerminalQueue:
     Type: AWS::SQS::Queue
     Properties:
-      QueueName: contentfulBackupTerminal.fifo
+      QueueName: !Sub ${AWS::StackName}-terminal.fifo
       FifoQueue: true
       MessageRetentionPeriod: 1209600
       SqsManagedSseEnabled: true
@@ -464,7 +462,7 @@ Resources:
   SQSQueue:
     Type: AWS::SQS::Queue
     Properties:
-      QueueName: contentfulBackupQueue.fifo
+      QueueName: !Sub ${AWS::StackName}-source.fifo
       FifoQueue: true
       SqsManagedSseEnabled: true
       # Timing chain — these three are coupled and must not be edited in
@@ -580,7 +578,6 @@ Resources:
   NotifierLambdaRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: ContentfulBackupNotifierLambdaRole
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -794,3 +791,15 @@ Outputs:
   TerminalQueueUrl:
     Description: URL of the terminal queue holding messages that exhausted DLQ redrive
     Value: !GetAtt TerminalQueue.QueueUrl
+  BackupBucketName:
+    Description: Name of the backup bucket
+    Value: !Ref BackupBucket
+  BackupFunctionName:
+    Description: Name of the Backup Lambda function (read by the deploy script)
+    Value: !Ref BackupLambdaFunc
+  FilterFunctionName:
+    Description: Name of the Filter Lambda function (read by the deploy script)
+    Value: !Ref FilterLambdaFunc
+  NotifierFunctionName:
+    Description: Name of the Notifier Lambda function (read by the deploy script)
+    Value: !Ref NotifierLambdaFunc
