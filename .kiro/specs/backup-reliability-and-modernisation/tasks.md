@@ -42,13 +42,13 @@ Tasks 1–7 are template and test-harness work that requires **no dependency cha
   - _Requirements: 4.1–4.6, 6.1–6.8, 7.4, 7.5, 7.6_
   - _Verify: a template test asserting the DLQ→Notifier mapping exists, both mappings honour the parameter, and the subscription is condition-gated._
 
-- [ ] **5. Backup_Lambda: throw on every failure path.**
+- [x] **5. Backup_Lambda: throw on every failure path.**
   - Remove `sendResponse` from all failure paths (retain only on success or delete it); `throw`, never return, on any failure. Remove the unreachable `$metadata.httpStatusCode` branches. Log message and stack before propagating; never return the raw error object.
   - Publish to the Alert_Topic before rethrowing **only when `ApproximateReceiveCount == 1`**.
   - _Requirements: 1.1–1.5, 7.1, 7.2, 7.3, 0.2, 46.1–46.10_
   - _Verify: `assert.rejects` on upload failure, export failure, parameter failure; a test that a publish happens once on first delivery and not on redelivery, and none on success._
 
-- [ ] **6. Backup_Lambda: message lifecycle and event-envelope validation.**
+- [x] **6. Backup_Lambda: message lifecycle and event-envelope validation.**
   - Remove `deleteMessageAsync` and its call; drop `sqs:DeleteMessage`/`ReceiveMessage`/`GetQueueAttributes` from the role's *code use* while **retaining** them as the ESM's poll grant (with the comment and the presence test). Drop all DLQ grants from the Backup role.
   - Validate the event envelope in all three functions (zero records → throw; unrecognised record body → fail open, no email; guard nested paths).
   - _Requirements: 2.1–2.5, 22.1–22.7_
@@ -63,7 +63,7 @@ Tasks 1–7 are template and test-harness work that requires **no dependency cha
 
 ## Phase 2 — The atomic dependency change
 
-- [ ] **8. Runtime, export library, archive library, and SDK — one commit.**
+- [x] **8. Runtime, export library, archive library, and SDK — one commit.**
   - Confirm the resolved `contentful-export` 8.x version against npm; confirm it ships CJS (verified in design — no ESM conversion needed). Set both functions to `nodejs24.x` (arm64 kept).
   - Replace `adm-zip` with `archiver`; declare `@aws-sdk/client-s3`, `-sqs`, `-ssm`, `-sns`, `@aws-sdk/lib-storage`, `contentful-export`, `archiver` as pinned dependencies in each Lambda's `package.json`; reconcile the `filter-lambda` manifest/lock.
   - Add `.nvmrc` (`24`) and `engines` to all four manifests; switch documented and scripted installs to `npm ci`.
