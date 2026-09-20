@@ -6,11 +6,12 @@
   "engines": {
     "node": ">=24 <25"
   },
+  "//dependencyPins": "archiver is held at 7.0.1 DELIBERATELY — see backup-lambda/package.json for the full reason: 7.0.1 is advisory-free CommonJS, while archiver 8.0.0 is pure ESM with class exports and no callable default, which breaks `archiver('zip', ...)` in build-lambda.js. dotenv IS on latest (18.x), verified to still load deploy/.env.",
   "dependencies": {
     "@aws-sdk/client-cloudformation": "3.1136.0",
     "@aws-sdk/client-lambda": "3.1136.0",
     "@aws-sdk/credential-providers": "3.1136.0",
     "archiver": "7.0.1",
-    "dotenv": "16.4.5"
+    "dotenv": "18.0.1"
   }
 }

@@ -10,6 +10,7 @@
     "scan:cfn": "cfn-guard validate --data infrastructure/template.yaml --rules infrastructure/cfn-guard.rules || checkov -f infrastructure/template.yaml",
     "audit": "npm audit --omit=dev --audit-level=high"
   },
+  "//dependencyPins": "js-yaml is held at ^4.x and fast-check at ^3.x DELIBERATELY. Both are test-only devDependencies that never ship to a Lambda, and both current majors carry ZERO npm advisories. Their latest majors are breaking: js-yaml 5 removed the `Type` constructor and `DEFAULT_SCHEMA.extend()` that tests/helpers/cfn-template.js uses to parse CloudFormation intrinsic tags (!Ref/!Sub), replacing them with defineScalarTag/Schema; fast-check 4 is a major rewrite of the property-test API. Upgrading buys no security or product benefit and risks changing how the template parses under test. Revisit only if an advisory lands on 4.x/3.x, or alongside a deliberate test-helper migration.",
   "devDependencies": {
     "fast-check": "^3.22.0",
     "js-yaml": "^4.1.1"
