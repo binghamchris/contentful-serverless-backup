@@ -15,7 +15,7 @@ Tasks 1–7 are template and test-harness work that requires **no dependency cha
 
 ## Phase 1 — Template and harness (no dependency change, no AWS)
 
-- [ ] **1. Shared test harness and template invariants.**
+- [x] **1. Shared test harness and template invariants.**
   - Extract the duplicated `require.cache` stubbing preamble into one shared test helper, and the duplicated `CFN_SCHEMA` YAML-parsing block into one shared module both infrastructure test files import.
   - Add a `cfn-lint` (and a policy scan — `cfn-guard` or `checkov`) npm script that runs against `infrastructure/template.yaml`.
   - Add template-invariant tests that the template declares no alarm, no composite alarm, no metric filter, no dashboard and no scheduled/time-based trigger, and that no source file publishes a custom metric — enforcing the no-standing-cost, no-quota observability decision structurally so it cannot erode.
