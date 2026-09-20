@@ -1,26 +1,23 @@
-// Feature: project-quality-overhaul, Property 2: Upload status check returns true only for HTTP 200
-// Validates: Requirements 2.1, 2.2
+// Property: a caught backup failure publishes an alert on first delivery only.
+// Replaces the obsolete "uploadFile returns true iff HTTP 200" test — that
+// test enshrined the removed status-code-inspection anti-pattern that the
+// redesign eliminated (failures now THROW; success/failure is never signalled
+// by an HTTP status code). Validates: Requirements 46.1-46.10.
 
-// Mutable status code that the mock S3Client.send() will return
-let mockHttpStatusCode = 200;
-
-// Stub out heavy dependencies before requiring backup-lambda/index.js
-// uploadFile uses s3Client.send(), so the S3Client mock must have a working send method
 const Module = require('node:module');
 const originalResolve = Module._resolveFilename;
+
+let publishCount = 0;
 const stubs = {
   'contentful-export': () => {},
-  'adm-zip': class {},
-  '@aws-sdk/client-s3': {
-    S3Client: class {
-      send() {
-        return Promise.resolve({ '$metadata': { httpStatusCode: mockHttpStatusCode } });
-      }
-    },
-    PutObjectCommand: class {},
-  },
-  '@aws-sdk/client-sqs': { SQSClient: class {}, DeleteMessageCommand: class {} },
+  archiver: () => ({ on() { return this; }, pipe() { return this; }, directory() { return this; }, finalize() { return Promise.resolve(); } }),
+  '@aws-sdk/client-s3': { S3Client: class {}, CopyObjectCommand: class {}, ListObjectsV2Command: class {} },
+  '@aws-sdk/lib-storage': { Upload: class { done() { return Promise.resolve({}); } } },
   '@aws-sdk/client-ssm': { SSMClient: class {}, GetParametersCommand: class {} },
+  '@aws-sdk/client-sns': {
+    SNSClient: class { send() { publishCount += 1; return Promise.resolve({}); } },
+    PublishCommand: class { constructor(p) { this.params = p; } },
+  },
 };
 Module._resolveFilename = function (request, parent, ...rest) {
   if (stubs[request] !== undefined) return request;
@@ -30,31 +27,36 @@ for (const [name, exp] of Object.entries(stubs)) {
   require.cache[name] = { id: name, filename: name, loaded: true, exports: exp };
 }
 
-// Set required env vars that uploadFile reads
-process.env.S3_BUCKET_NAME = 'test-bucket';
-process.env.S3_STORAGE_CLASS = 'STANDARD';
+process.env.ALERT_TOPIC_ARN = 'arn:aws:sns:eu-central-1:1:alerts';
 
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 const fc = require('fast-check');
-const { uploadFile } = require('../../backup-lambda/index.js');
+const { publishFailureIfFirstDelivery } = require('../../backup-lambda/index.js');
 
-describe('Property 2: Upload status check returns true only for HTTP 200', () => {
-  it('should return true iff HTTP status code is exactly 200', async () => {
+describe('Property: alert publishes on first delivery only', () => {
+  it('publishes iff ApproximateReceiveCount === 1, for any positive count', async () => {
     await fc.assert(
-      fc.asyncProperty(
-        fc.integer({ min: 100, max: 599 }),
-        async (statusCode) => {
-          mockHttpStatusCode = statusCode;
-          const result = await uploadFile(Buffer.from('test'), 'test-key');
-          if (statusCode === 200) {
-            assert.equal(result, true, `Expected true for status 200, got ${result}`);
-          } else {
-            assert.equal(result, false, `Expected false for status ${statusCode}, got ${result}`);
-          }
+      fc.asyncProperty(fc.integer({ min: 1, max: 50 }), async (count) => {
+        publishCount = 0;
+        const record = { attributes: { ApproximateReceiveCount: String(count) } };
+        const published = await publishFailureIfFirstDelivery(record, new Error('boom'));
+        if (count === 1) {
+          assert.equal(published, true);
+          assert.equal(publishCount, 1);
+        } else {
+          assert.equal(published, false);
+          assert.equal(publishCount, 0);
         }
-      ),
+      }),
       { numRuns: 100 }
     );
+  });
+
+  it('never throws even when the count attribute is absent or malformed', async () => {
+    for (const attributes of [undefined, {}, { ApproximateReceiveCount: 'x' }, { ApproximateReceiveCount: null }]) {
+      const published = await publishFailureIfFirstDelivery({ attributes }, new Error('boom'));
+      assert.equal(published, false);
+    }
   });
 });

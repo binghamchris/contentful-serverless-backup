@@ -1,16 +1,17 @@
-// Feature: project-quality-overhaul, Property 10: sendResponse produces a well-formed response object
-// Validates: Requirements 3.1, 3.2, 12.1, 12.2
+// Property: generateS3Key always produces a final key that the Coverage_Check's
+// anchored ARCHIVE_KEY pattern matches, for any valid Date. Replaces the
+// tautological "sendResponse returns {statusCode, body}" test (which only
+// restated the function's definition). Validates: Requirements 33.x, 34.x.
 
-// Stub out heavy dependencies before requiring backup-lambda/index.js
-// sendResponse is a pure function and doesn't use any of these
 const Module = require('node:module');
 const originalResolve = Module._resolveFilename;
 const stubs = {
   'contentful-export': () => {},
-  'adm-zip': class {},
-  '@aws-sdk/client-s3': { S3Client: class {}, PutObjectCommand: class {} },
-  '@aws-sdk/client-sqs': { SQSClient: class {}, DeleteMessageCommand: class {} },
+  archiver: () => ({ on() { return this; }, pipe() { return this; }, directory() { return this; }, finalize() { return Promise.resolve(); } }),
+  '@aws-sdk/client-s3': { S3Client: class {}, CopyObjectCommand: class {}, ListObjectsV2Command: class {} },
+  '@aws-sdk/lib-storage': { Upload: class { done() { return Promise.resolve({}); } } },
   '@aws-sdk/client-ssm': { SSMClient: class {}, GetParametersCommand: class {} },
+  '@aws-sdk/client-sns': { SNSClient: class {}, PublishCommand: class {} },
 };
 Module._resolveFilename = function (request, parent, ...rest) {
   if (stubs[request] !== undefined) return request;
@@ -23,37 +24,27 @@ for (const [name, exp] of Object.entries(stubs)) {
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 const fc = require('fast-check');
-const { sendResponse } = require('../../backup-lambda/index.js');
+const { generateS3Key } = require('../../backup-lambda/index.js');
 
-describe('Property 10: sendResponse produces a well-formed response object', () => {
-  it('should return a plain object with exactly statusCode and body matching inputs', () => {
+// The same anchored pattern the Coverage_Check uses: ends .<ms>Z.zip so it
+// excludes .partial.zip and any staging key.
+const ARCHIVE_KEY = /\.\d{3}Z\.zip$/;
+
+describe('Property: generated final key matches the coverage archive pattern', () => {
+  it('ends .<ms>Z.zip for any valid timestamp', () => {
     fc.assert(
       fc.property(
-        fc.integer(),
-        fc.string(),
-        (status, body) => {
-          const result = sendResponse(status, body);
-
-          // The response is a plain object (not null, not an array)
-          assert.equal(typeof result, 'object', 'Result should be an object');
-          assert.ok(result !== null, 'Result should not be null');
-          assert.ok(!Array.isArray(result), 'Result should not be an array');
-
-          // The returned object has exactly two keys: statusCode and body
-          const keys = Object.keys(result);
-          assert.deepStrictEqual(keys.sort(), ['body', 'statusCode'],
-            'Result should have exactly two keys: statusCode and body');
-
-          // statusCode equals the input status
-          assert.equal(result.statusCode, status,
-            'statusCode should equal the input status');
-
-          // body equals the input body
-          assert.equal(result.body, body,
-            'body should equal the input body');
+        fc.date({ min: new Date('2000-01-01T00:00:00.000Z'), max: new Date('2100-01-01T00:00:00.000Z') }),
+        (date) => {
+          const { zipFilename, s3Path } = generateS3Key(date);
+          assert.match(zipFilename, ARCHIVE_KEY, `filename ${zipFilename} must match the archive pattern`);
+          // Path is date-partitioned YYYY/MM/DD with no colons or 'T'.
+          assert.match(s3Path, /^\d{4}\/\d{2}\/\d{2}$/, `path ${s3Path} must be YYYY/MM/DD`);
+          const fullKey = `${s3Path}/${zipFilename}`;
+          assert.match(fullKey, ARCHIVE_KEY);
         }
       ),
-      { numRuns: 100 }
+      { numRuns: 200 }
     );
   });
 });

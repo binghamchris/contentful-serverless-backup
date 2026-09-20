@@ -7,10 +7,11 @@ const Module = require('node:module');
 const originalResolve = Module._resolveFilename;
 const stubs = {
   'contentful-export': () => {},
-  'adm-zip': class {},
-  '@aws-sdk/client-s3': { S3Client: class {}, PutObjectCommand: class {} },
-  '@aws-sdk/client-sqs': { SQSClient: class {}, DeleteMessageCommand: class {} },
+  archiver: () => ({ on() { return this; }, pipe() { return this; }, directory() { return this; }, finalize() { return Promise.resolve(); } }),
+  '@aws-sdk/client-s3': { S3Client: class {}, CopyObjectCommand: class {}, ListObjectsV2Command: class {} },
+  '@aws-sdk/lib-storage': { Upload: class { done() { return Promise.resolve({}); } } },
   '@aws-sdk/client-ssm': { SSMClient: class {}, GetParametersCommand: class {} },
+  '@aws-sdk/client-sns': { SNSClient: class {}, PublishCommand: class {} },
 };
 Module._resolveFilename = function (request, parent, ...rest) {
   if (stubs[request] !== undefined) return request;
